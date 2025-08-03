@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useRouter } from 'next/navigation';
+import { getUserDisplayName } from '@/lib/utils';
 
 export default function LoginPage() {
   const [user, setUser] = useState<User | null>(null);
@@ -158,7 +159,7 @@ export default function LoginPage() {
                     )}
                     <div className="text-left">
                       <p className="font-semibold text-green-800">✅ Signed in</p>
-                      <p className="text-sm text-green-600">{user.email}</p>
+                      <p className="text-sm text-green-600 font-bold">{getUserDisplayName(user)}</p>
                     </div>
                   </div>
                 </div>
