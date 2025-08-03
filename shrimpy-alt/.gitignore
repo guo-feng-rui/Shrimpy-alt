@@ -2,6 +2,9 @@
 
 # dependencies
 /node_modules
+/functions/node_modules
+/functions/package-lock.json
+/functions/lib/
 /.pnp
 .pnp.*
 .yarn/*
@@ -39,3 +42,14 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# firebase
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
+.runtimeconfig.json
+
+# build outputs
+/lib/
+/dist/
+/out/
