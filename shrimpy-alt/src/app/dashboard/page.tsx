@@ -105,9 +105,8 @@ export default function DashboardPage() {
 
   // Debug logging
   useEffect(() => {
-    console.log('Chat status:', status);
     console.log('Messages count:', messages.length);
-  }, [status, messages.length]);
+  }, [messages.length]);
   
 
   const loadStoredData = useCallback(async () => {

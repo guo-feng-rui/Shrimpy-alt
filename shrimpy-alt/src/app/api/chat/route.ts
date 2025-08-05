@@ -4,7 +4,6 @@ import { streamText, UIMessage, convertToModelMessages } from 'ai';
 const azure = createAzure({
   resourceName: process.env.AZURE_RESOURCE_NAME || 'shrimpy-dev-tmp-resource',
   apiKey: process.env.AZURE_OPENAI_API_KEY,
-  apiVersion: '2024-04-01-preview',
 });
 
 export async function POST(req: Request) {
@@ -12,6 +11,17 @@ export async function POST(req: Request) {
     console.log('Chat API: Starting request processing');
     const { messages }: { messages: UIMessage[] } = await req.json();
     console.log('Chat API: Messages received:', messages?.length || 0);
+    
+    // Validate messages array
+    if (!messages || !Array.isArray(messages)) {
+      console.error('Chat API: Invalid messages format');
+      return new Response(JSON.stringify({ 
+        error: 'Invalid messages format' 
+      }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
 
     // Check if Azure OpenAI is configured
     const isAzureConfigured = process.env.AZURE_OPENAI_API_KEY && 
@@ -62,9 +72,32 @@ For now, I can help you with basic guidance on using the platform.`;
     console.log('Chat API: Azure OpenAI configured, using Azure API');
     
          try {
-       const result = await streamText({
-         model: azure(process.env.AZURE_OPENAI_DEPLOYMENT_NAME || 'gpt-4o'),
-         system: `You are the AI assistant for Weak-Tie Activator, a platform that helps users analyze and activate their LinkedIn professional networks. Your role is to:
+           console.log('Chat API: Converting messages to model format');
+           console.log('Chat API: Messages structure:', JSON.stringify(messages, null, 2));
+           
+           // Handle message conversion more carefully
+           let modelMessages;
+           try {
+             // Filter out any invalid messages first
+             const validMessages = messages.filter(msg => 
+               msg && typeof msg === 'object' && 
+               msg.role && 
+               msg.parts && 
+               Array.isArray(msg.parts)
+             );
+             
+             console.log('Chat API: Valid messages count:', validMessages.length);
+             
+             modelMessages = convertToModelMessages(validMessages);
+             console.log('Chat API: Messages converted successfully');
+           } catch (convertError) {
+             console.error('Chat API: Error converting messages:', convertError);
+             throw new Error(`Failed to convert messages: ${convertError instanceof Error ? convertError.message : 'Unknown error'}`);
+           }
+           
+           const result = await streamText({
+             model: azure(process.env.AZURE_OPENAI_DEPLOYMENT_NAME || 'gpt-4o'),
+             system: `You are the AI assistant for Weak-Tie Activator, a platform that helps users analyze and activate their LinkedIn professional networks. Your role is to:
 
 1. Help users understand how to upload and process their LinkedIn connections data
 2. Guide them through profile enrichment features 
@@ -73,8 +106,8 @@ For now, I can help you with basic guidance on using the platform.`;
 5. Explain how to leverage weak ties for career opportunities
 
 Be conversational, helpful, and focused on professional networking strategy. Keep responses concise but actionable.`,
-         messages: convertToModelMessages(messages),
-       });
+             messages: modelMessages,
+           });
 
        console.log('Chat API: StreamText completed successfully');
        

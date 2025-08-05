@@ -5,7 +5,6 @@ import { NextRequest, NextResponse } from 'next/server';
 const azure = createAzure({
   resourceName: process.env.AZURE_RESOURCE_NAME || 'shrimpy-dev-tmp-resource',
   apiKey: process.env.AZURE_OPENAI_API_KEY,
-  apiVersion: '2024-04-01-preview',
 });
 
 export async function POST(req: NextRequest) {
