@@ -272,25 +272,25 @@ export default function DashboardPage() {
       for (let i = 0; i < connectionsWithUrls.length; i += batchSize) {
         const batch = connectionsWithUrls.slice(i, i + batchSize);
         
-        // Process batch with delays
+        // Process batch with delays only for API calls
         for (let j = 0; j < batch.length; j++) {
           const connection = batch[j];
-          const enrichedConnection = await enrichConnectionData(connection, user?.uid);
-          enriched.push(enrichedConnection);
+          const result = await enrichConnectionData(connection, user?.uid);
+          enriched.push(result.connection);
           
           // Update progress
           const currentProgress = Math.round(((i + j + 1) / connectionsWithUrls.length) * 100);
           setEnrichmentProgress(currentProgress);
           
-          // Add delay between requests
-          if (j < batch.length - 1) {
+          // Only add delay if it was an API call (not cache hit)
+          if (!result.wasFromCache && j < batch.length - 1) {
             await new Promise(resolve => setTimeout(resolve, 1000));
           }
         }
         
-        // Add delay between batches
+        // Add shorter delay between batches for cache hits
         if (i + batchSize < connectionsWithUrls.length) {
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          await new Promise(resolve => setTimeout(resolve, 500)); // Reduced from 2000ms
         }
       }
       

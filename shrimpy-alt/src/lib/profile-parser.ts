@@ -1,17 +1,178 @@
 export interface ProfileData {
+  // Basic identity
+  id?: number;
+  urn?: string;
+  username?: string;
+  firstName?: string;
+  lastName?: string;
   name?: string;
+  isPremium?: boolean;
+  
+  // Profile media
+  profilePicture?: string;
+  profilePictures?: Array<{
+    url: string;
+    width: number;
+    height: number;
+  }>;
+  
+  // Basic info
   headline?: string;
+  summary?: string;
+  
+  // Location
   location?: string;
+  geo?: {
+    country?: string;
+    city?: string;
+    full?: string;
+    countryCode?: string;
+  };
+  
+  // Legacy fields for backward compatibility
   company?: string;
-  position?: string;
-  education?: string[];
+  
+  // Rich education data
+  educations?: Array<{
+    start?: {
+      year: number;
+      month: number;
+      day: number;
+    };
+    end?: {
+      year: number;
+      month: number;
+      day: number;
+    };
+    fieldOfStudy?: string;
+    degree?: string;
+    grade?: string;
+    schoolName?: string;
+    description?: string;
+    activities?: string;
+    url?: string;
+    schoolId?: string;
+    logo?: Array<{
+      url: string;
+      width: number;
+      height: number;
+    }>;
+  }>;
+  
+  // Rich skills data
   skills?: string[];
+  skillsDetailed?: Array<{
+    name: string;
+    passedSkillAssessment: boolean;
+  }>;
+  
+  // Rich experience data
   experience?: Array<{
     title: string;
     company: string;
     duration?: string;
   }>;
-  summary?: string;
+  position?: Array<{
+    companyId?: number;
+    companyName?: string;
+    companyUsername?: string;
+    companyURL?: string;
+    companyLogo?: string;
+    companyIndustry?: string;
+    companyStaffCountRange?: string;
+    title?: string;
+    multiLocaleTitle?: { [key: string]: string };
+    multiLocaleCompanyName?: { [key: string]: string };
+    location?: string;
+    locationType?: string;
+    description?: string;
+    employmentType?: string;
+    start?: {
+      year: number;
+      month: number;
+      day: number;
+    };
+    end?: {
+      year: number;
+      month: number;
+      day: number;
+    };
+  }>;
+  fullPositions?: Array<{
+    companyId?: number;
+    companyName?: string;
+    companyUsername?: string;
+    companyURL?: string;
+    companyLogo?: string;
+    companyIndustry?: string;
+    companyStaffCountRange?: string;
+    title?: string;
+    multiLocaleTitle?: { [key: string]: string };
+    multiLocaleCompanyName?: { [key: string]: string };
+    location?: string;
+    locationType?: string;
+    description?: string;
+    employmentType?: string;
+    start?: {
+      year: number;
+      month: number;
+      day: number;
+    };
+    end?: {
+      year: number;
+      month: number;
+      day: number;
+    };
+  }>;
+  
+  // Rich certifications data
+  certifications?: Array<{
+    name?: string;
+    start?: {
+      year: number;
+      month: number;
+      day: number;
+    };
+    end?: {
+      year: number;
+      month: number;
+      day: number;
+    };
+    authority?: string;
+    company?: {
+      name?: string;
+      universalName?: string;
+      logo?: string;
+      staffCountRange?: any;
+      headquarter?: any;
+    };
+    timePeriod?: {
+      start?: {
+        year: number;
+        month: number;
+        day: number;
+      };
+      end?: {
+        year: number;
+        month: number;
+        day: number;
+      };
+    };
+  }>;
+  
+  // Projects
+  projects?: any;
+  
+  // Locale and internationalization
+  supportedLocales?: Array<{
+    country: string;
+    language: string;
+  }>;
+  multiLocaleFirstName?: { [key: string]: string };
+  multiLocaleLastName?: { [key: string]: string };
+  multiLocaleHeadline?: { [key: string]: string };
+  
+  // Original fields
   url: string;
   flags?: {
     isCreator?: boolean;
@@ -29,6 +190,7 @@ export interface ProfileParseResult {
   success: boolean;
   data?: ProfileData;
   error?: string;
+  wasFromCache?: boolean;
 }
 
 import { getCachedProfile, setCachedProfile, clearUserCache } from './firestore-cache';
@@ -68,7 +230,8 @@ export async function fetchLinkedInProfile(profileUrl: string, passedUserId?: st
         if (cachedData) {
           return {
             success: true,
-            data: cachedData
+            data: cachedData,
+            wasFromCache: true
           };
         }
       } catch (cacheError) {
@@ -94,22 +257,73 @@ export async function fetchLinkedInProfile(profileUrl: string, passedUserId?: st
 
     const result = await response.json();
     
-    // Parse the response and extract relevant data based on the actual API structure
+    // Parse the response data into our comprehensive format
     const profileData: ProfileData = {
       url: profileUrl,
-      name: result.name?.default ? `${result.name.default.first} ${result.name.default.last}` : result.name?.i18n?.en ? `${result.name.i18n.en.first} ${result.name.i18n.en.last}` : '',
-      headline: result.headline?.default || result.headline?.i18n?.en || '',
-      location: result.location?.full || result.location?.city || '',
-      company: result.positions?.[0]?.company?.name || '',
-      position: result.positions?.[0]?.title || '',
+      
+      // Basic identity
+      id: result.id,
+      urn: result.urn,
+      username: result.username,
+      firstName: result.firstName,
+      lastName: result.lastName,
+      name: result.name?.default ? `${result.name.default.first} ${result.name.default.last}` : 
+            result.name?.i18n?.en ? `${result.name.i18n.en.first} ${result.name.i18n.en.last}` : 
+            `${result.firstName || ''} ${result.lastName || ''}`.trim(),
+      isPremium: result.isPremium,
+      
+      // Profile media
+      profilePicture: result.profilePicture,
+      profilePictures: result.profilePictures || [],
+      
+      // Basic info
+      headline: result.headline?.default || result.headline?.i18n?.en || result.headline || '',
       summary: result.summary || '',
-      skills: result.skills || [],
-      education: result.education?.map((edu: any) => edu.school) || [],
-      experience: result.positions?.map((pos: any) => ({
-        title: pos.title,
+      
+      // Location
+      location: result.geo?.full || result.location?.full || result.location?.city || '',
+      geo: result.geo || {},
+      
+      // Legacy fields for backward compatibility
+      company: result.position?.[0]?.companyName || result.positions?.[0]?.company?.name || '',
+      
+      // Rich education data
+      educations: result.educations || result.education || [],
+      
+      // Rich skills data
+      skills: result.skills?.map((skill: any) => typeof skill === 'string' ? skill : skill.name) || [],
+      skillsDetailed: result.skills || [],
+      
+      // Rich experience data
+      experience: result.position?.map((pos: any) => ({
+        title: pos.title || '',
+        company: pos.companyName || '',
+        duration: pos.start && pos.end ? 
+          `${pos.start.year || ''}-${pos.end.year || ''}` : 
+          pos.start ? `Since ${pos.start.year || ''}` : ''
+      })) || result.positions?.map((pos: any) => ({
+        title: pos.title || '',
         company: pos.company?.name || '',
-        duration: pos.start && pos.end ? `${pos.start} - ${pos.end}` : pos.start ? `Since ${pos.start}` : ''
+        duration: pos.start && pos.end ? 
+          `${pos.start.year || ''}-${pos.end.year || ''}` : 
+          pos.start ? `Since ${pos.start.year || ''}` : ''
       })) || [],
+      position: result.position || [],
+      fullPositions: result.fullPositions || result.position || [],
+      
+      // Rich certifications data
+      certifications: result.certifications || [],
+      
+      // Projects
+      projects: result.projects || {},
+      
+      // Locale and internationalization
+      supportedLocales: result.supportedLocales || [],
+      multiLocaleFirstName: result.multiLocaleFirstName || {},
+      multiLocaleLastName: result.multiLocaleLastName || {},
+      multiLocaleHeadline: result.multiLocaleHeadline || {},
+      
+      // Original fields
       flags: result.flags || {},
       languages: result.languages || [],
       recommendations: result.recommendations || { given: 0, received: 0 }
@@ -126,7 +340,8 @@ export async function fetchLinkedInProfile(profileUrl: string, passedUserId?: st
 
     return {
       success: true,
-      data: profileData
+      data: profileData,
+      wasFromCache: false
     };
 
   } catch (error) {
@@ -138,9 +353,9 @@ export async function fetchLinkedInProfile(profileUrl: string, passedUserId?: st
   }
 }
 
-export async function enrichConnectionData(connection: any, passedUserId?: string): Promise<any> {
+export async function enrichConnectionData(connection: any, passedUserId?: string): Promise<{connection: any, wasFromCache: boolean}> {
   if (!connection.url) {
-    return connection;
+    return { connection, wasFromCache: false };
   }
 
   try {
@@ -148,25 +363,68 @@ export async function enrichConnectionData(connection: any, passedUserId?: strin
     
          if (profileResult.success && profileResult.data) {
        return {
+         connection: {
          ...connection,
          enriched: true,
+         
+         // Basic identity
+         profileId: profileResult.data.id,
+         urn: profileResult.data.urn,
+         username: profileResult.data.username,
+         firstName: profileResult.data.firstName,
+         lastName: profileResult.data.lastName,
+         isPremium: profileResult.data.isPremium,
+         
+         // Profile media
+         profilePicture: profileResult.data.profilePicture,
+         profilePictures: profileResult.data.profilePictures,
+         
+         // Basic info
          headline: profileResult.data.headline,
-         location: profileResult.data.location,
-         skills: profileResult.data.skills,
-         experience: profileResult.data.experience,
-         education: profileResult.data.education,
          summary: profileResult.data.summary,
+         
+         // Location
+         location: profileResult.data.location,
+         geo: profileResult.data.geo,
+         
+         // Rich education data
+         educations: profileResult.data.educations,
+         
+         // Rich skills data
+         skills: profileResult.data.skills,
+         skillsDetailed: profileResult.data.skillsDetailed,
+         
+         // Rich experience data
+         experience: profileResult.data.experience,
+         position: profileResult.data.position,
+         fullPositions: profileResult.data.fullPositions,
+         
+         // Rich certifications data
+         certifications: profileResult.data.certifications,
+         
+         // Projects
+         projects: profileResult.data.projects,
+         
+         // Locale and internationalization
+         supportedLocales: profileResult.data.supportedLocales,
+         multiLocaleFirstName: profileResult.data.multiLocaleFirstName,
+         multiLocaleLastName: profileResult.data.multiLocaleLastName,
+         multiLocaleHeadline: profileResult.data.multiLocaleHeadline,
+         
+         // Original fields
          flags: profileResult.data.flags,
          languages: profileResult.data.languages,
          recommendations: profileResult.data.recommendations
+       },
+       wasFromCache: profileResult.wasFromCache || false
        };
     } else {
       console.warn(`Failed to enrich profile for ${connection.name}:`, profileResult.error);
-      return connection;
+      return { connection, wasFromCache: false };
     }
   } catch (error) {
     console.error(`Error enriching profile for ${connection.name}:`, error);
-    return connection;
+    return { connection, wasFromCache: false };
   }
 }
 
@@ -176,21 +434,20 @@ export async function enrichConnectionsBatch(connections: any[], batchSize: numb
   for (let i = 0; i < connections.length; i += batchSize) {
     const batch = connections.slice(i, i + batchSize);
     
-    // Process batch with delays to respect API rate limits
-    const batchPromises = batch.map(async (connection, index) => {
-      // Add delay between requests to avoid rate limiting
-      if (index > 0) {
+    // Process batch with delays only for API calls
+    for (let j = 0; j < batch.length; j++) {
+      const result = await enrichConnectionData(batch[j]);
+      enrichedConnections.push(result.connection);
+      
+      // Only add delay if it was an API call (not cache hit)
+      if (!result.wasFromCache && j < batch.length - 1) {
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
-      return await enrichConnectionData(connection);
-    });
-    
-    const batchResults = await Promise.all(batchPromises);
-    enrichedConnections.push(...batchResults);
+    }
     
     // Add delay between batches
     if (i + batchSize < connections.length) {
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Reduced delay
     }
   }
   
@@ -252,18 +509,18 @@ export function testProfileParsing() {
     headline: sampleResponse.headline?.default || '',
     location: sampleResponse.location?.full || '',
     company: sampleResponse.positions?.[0]?.company?.name || '',
-    position: sampleResponse.positions?.[0]?.title || '',
     summary: sampleResponse.summary || '',
     skills: sampleResponse.skills || [],
-    education: sampleResponse.education?.map((edu: any) => edu.school) || [],
+    educations: [],
     experience: sampleResponse.positions?.map((pos: any) => ({
       title: pos.title,
       company: pos.company?.name || '',
       duration: pos.start && pos.end ? `${pos.start} - ${pos.end}` : pos.start ? `Since ${pos.start}` : ''
     })) || [],
-    flags: sampleResponse.flags,
-    languages: sampleResponse.languages,
-    recommendations: sampleResponse.recommendations
+    position: [],
+    flags: sampleResponse.flags || {},
+    languages: sampleResponse.languages || [],
+    recommendations: sampleResponse.recommendations || { given: 0, received: 0 }
   };
 
   

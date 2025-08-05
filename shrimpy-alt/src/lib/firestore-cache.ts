@@ -18,7 +18,9 @@ interface CachedProfile {
 function getCacheKey(userId: string, profileUrl: string): string {
   // Create a safe document ID by replacing special characters
   const safeUrl = profileUrl.replace(/[\/\?#&=]/g, '_');
-  return `${userId}_${safeUrl}`;
+  const cacheKey = `${userId}_${safeUrl}`;
+
+  return cacheKey;
 }
 
 // Helper function to remove undefined values from an object
@@ -63,7 +65,7 @@ export async function setCachedProfile(userId: string, profileUrl: string, profi
     };
     
     await setDoc(doc(db, CACHE_COLLECTION, cacheKey), cachedData);
-    console.log('💾 Profile cached successfully:', profileUrl);
+  
   } catch (error) {
     console.error('Error caching profile:', error);
     // Don't throw - caching failure shouldn't break the app
@@ -78,7 +80,7 @@ export async function getCachedProfile(userId: string, profileUrl: string): Prom
     const docSnap = await getDoc(docRef);
     
     if (!docSnap.exists()) {
-      console.log('❌ Cache MISS for profile:', profileUrl);
+    
       return null;
     }
     
@@ -87,14 +89,14 @@ export async function getCachedProfile(userId: string, profileUrl: string): Prom
     
     // Check if cache has expired
     if (cached.expiresAt.toMillis() < now.toMillis()) {
-      console.log('⏰ Cache EXPIRED for profile:', profileUrl);
+  
       // Delete expired cache
       await deleteDoc(docRef);
       return null;
     }
     
 
-    console.log('✅ Cache HIT for profile:', profileUrl);
+  
     return cached.data;
   } catch (error) {
     console.error('Error getting cached profile:', error);

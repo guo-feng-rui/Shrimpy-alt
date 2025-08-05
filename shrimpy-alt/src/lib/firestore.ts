@@ -31,7 +31,31 @@ export interface StoredConnection {
     company: string;
     duration?: string;
   }>;
-  education?: string[];
+  educations?: Array<{
+    start?: {
+      year: number;
+      month: number;
+      day: number;
+    };
+    end?: {
+      year: number;
+      month: number;
+      day: number;
+    };
+    fieldOfStudy?: string;
+    degree?: string;
+    grade?: string;
+    schoolName?: string;
+    description?: string;
+    activities?: string;
+    url?: string;
+    schoolId?: string;
+    logo?: Array<{
+      url: string;
+      width: number;
+      height: number;
+    }>;
+  }>;
   summary?: string;
   flags?: {
     isCreator?: boolean;
@@ -89,7 +113,7 @@ export async function storeConnections(userId: string, connections: any[]): Prom
       headline: connection.headline,
       skills: connection.skills || [],
       experience: connection.experience || [],
-      education: connection.education || [],
+      educations: connection.educations || [],
       summary: connection.summary,
       flags: connection.flags,
       languages: connection.languages,
