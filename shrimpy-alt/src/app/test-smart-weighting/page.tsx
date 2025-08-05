@@ -92,7 +92,7 @@ export default function TestSmartWeighting() {
 
       const weights = await SmartWeighting.calculateSmartWeights(query, goal);
       const analysis = await SmartWeighting.analyzeSemanticIntent(query);
-      const patterns = SmartWeighting.detectPatterns(query);
+      const patterns = await SmartWeighting.detectPatterns(query);
       const context = SmartWeighting.analyzeContext(query);
       
       const result: TestResult = {
@@ -191,7 +191,7 @@ export default function TestSmartWeighting() {
         if (testMode === 'smart') {
           const weights = await SmartWeighting.calculateSmartWeights(testQuery, goal);
           const analysis = await SmartWeighting.analyzeSemanticIntent(testQuery);
-          const patterns = SmartWeighting.detectPatterns(testQuery);
+          const patterns = await SmartWeighting.detectPatterns(testQuery);
           const context = SmartWeighting.analyzeContext(testQuery);
           
           newResults.push({

@@ -1,106 +1,40 @@
 // Smart Weighting System using Semantic Analysis and AI
 import { DynamicWeights, UserGoal } from './vector-schema';
 
-// Semantic categories with broader understanding
+// LLM-based semantic analysis categories (for reference only)
 export interface SemanticCategory {
   name: keyof DynamicWeights;
   description: string;
-  examples: string[];
-  relatedTerms: string[];
-  intentPatterns: string[];
 }
 
 export const SEMANTIC_CATEGORIES: SemanticCategory[] = [
   {
     name: 'skills',
-    description: 'Technical abilities, technologies, tools, and competencies',
-    examples: ['python', 'react', 'machine learning', 'cloud computing'],
-    relatedTerms: ['technology', 'programming', 'development', 'engineering', 'technical', 'expertise'],
-    intentPatterns: [
-      'looking for someone who knows',
-      'need someone with experience in',
-      'expert in',
-      'skilled in',
-      'proficient with'
-    ]
+    description: 'Technical abilities, technologies, tools, and competencies'
   },
   {
     name: 'experience',
-    description: 'Work history, seniority, roles, and career progression',
-    examples: ['senior', 'lead', 'manager', 'years of experience', 'expert'],
-    relatedTerms: ['seniority', 'level', 'role', 'position', 'background', 'career'],
-    intentPatterns: [
-      'senior level',
-      'experienced',
-      'lead role',
-      'manager position',
-      'years of experience'
-    ]
+    description: 'Work history, seniority, roles, and career progression'
   },
   {
     name: 'company',
-    description: 'Organizations, industries, business context, and company types',
-    examples: ['startup', 'google', 'fintech', 'enterprise', 'fortune 500'],
-    relatedTerms: ['organization', 'business', 'industry', 'sector', 'company'],
-    intentPatterns: [
-      'working at',
-      'from company',
-      'in industry',
-      'startup experience',
-      'enterprise background'
-    ]
+    description: 'Organizations, industries, business context, and company types'
   },
   {
     name: 'location',
-    description: 'Geographic location, remote work, and regional preferences',
-    examples: ['san francisco', 'remote', 'europe', 'new york', 'hybrid'],
-    relatedTerms: ['geographic', 'region', 'area', 'location', 'place'],
-    intentPatterns: [
-      'based in',
-      'located in',
-      'remote work',
-      'hybrid position',
-      'onsite role'
-    ]
+    description: 'Geographic location, remote work, and regional preferences'
   },
   {
     name: 'network',
-    description: 'Connections, relationships, referrals, and networking',
-    examples: ['alumni', 'mentor', 'connection', 'referral', 'mutual'],
-    relatedTerms: ['relationship', 'connection', 'network', 'referral', 'mutual'],
-    intentPatterns: [
-      'alumni from',
-      'mutual connection',
-      'referral from',
-      'network with',
-      'connected to'
-    ]
+    description: 'Connections, relationships, referrals, and networking'
   },
   {
     name: 'goal',
-    description: 'Career aspirations, interests, and personal objectives',
-    examples: ['career growth', 'opportunity', 'challenge', 'impact', 'mission'],
-    relatedTerms: ['aspiration', 'objective', 'purpose', 'interest', 'passion'],
-    intentPatterns: [
-      'looking for opportunity',
-      'career growth',
-      'new challenge',
-      'make impact',
-      'pursue passion'
-    ]
+    description: 'Career aspirations, interests, and personal objectives'
   },
   {
     name: 'education',
-    description: 'Academic background, degrees, institutions, and learning',
-    examples: ['phd', 'stanford', 'mba', 'university', 'degree'],
-    relatedTerms: ['academic', 'degree', 'university', 'college', 'education'],
-    intentPatterns: [
-      'graduated from',
-      'degree in',
-      'alumni of',
-      'studied at',
-      'education background'
-    ]
+    description: 'Academic background, degrees, institutions, and learning'
   }
 ];
 
@@ -149,8 +83,44 @@ export class SmartWeighting {
     }
   }
   
-  // Method 2: Pattern Recognition
-  static detectPatterns(query: string): Record<keyof DynamicWeights, number> {
+  // Method 2: LLM-Powered Pattern Recognition
+  static async detectPatterns(query: string): Promise<Record<keyof DynamicWeights, number>> {
+    const patterns: Record<keyof DynamicWeights, number> = {
+      skills: 0,
+      experience: 0,
+      company: 0,
+      location: 0,
+      network: 0,
+      goal: 0,
+      education: 0
+    };
+    
+    try {
+      // Use LLM to analyze the query for semantic patterns
+      const response = await fetch('/api/analyze-patterns', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ query })
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        if (result.success && result.patterns) {
+          return result.patterns;
+        }
+      }
+    } catch (error) {
+      console.error('LLM pattern detection failed:', error);
+    }
+    
+    // Fallback to basic keyword matching for reliability
+    return this.fallbackKeywordMatching(query);
+  }
+  
+  // Simple fallback pattern detection (minimal keyword matching)
+  private static fallbackKeywordMatching(query: string): Record<keyof DynamicWeights, number> {
     const patterns: Record<keyof DynamicWeights, number> = {
       skills: 0,
       experience: 0,
@@ -163,25 +133,28 @@ export class SmartWeighting {
     
     const queryLower = query.toLowerCase();
     
-    // Check for explicit mentions
-    SEMANTIC_CATEGORIES.forEach(category => {
-      // Direct keyword matches
-      const directMatches = category.examples.filter(example => 
-        queryLower.includes(example.toLowerCase())
-      ).length;
-      
-      // Related term matches
-      const relatedMatches = category.relatedTerms.filter(term => 
-        queryLower.includes(term.toLowerCase())
-      ).length;
-      
-      // Intent pattern matches
-      const intentMatches = category.intentPatterns.filter(pattern => 
-        queryLower.includes(pattern.toLowerCase())
-      ).length;
-      
-      patterns[category.name] = (directMatches * 0.5) + (relatedMatches * 0.3) + (intentMatches * 0.2);
-    });
+    // Minimal keyword detection as emergency fallback
+    if (queryLower.includes('skill') || queryLower.includes('technology') || queryLower.includes('help')) {
+      patterns.skills = 0.3;
+    }
+    if (queryLower.includes('senior') || queryLower.includes('experience') || queryLower.includes('years')) {
+      patterns.experience = 0.3;
+    }
+    if (queryLower.includes('startup') || queryLower.includes('company') || queryLower.includes('business')) {
+      patterns.company = 0.3;
+    }
+    if (queryLower.includes('remote') || queryLower.includes('location') || queryLower.includes('in ')) {
+      patterns.location = 0.3;
+    }
+    if (queryLower.includes('network') || queryLower.includes('connection') || queryLower.includes('alumni')) {
+      patterns.network = 0.3;
+    }
+    if (queryLower.includes('goal') || queryLower.includes('career') || queryLower.includes('opportunity')) {
+      patterns.goal = 0.3;
+    }
+    if (queryLower.includes('education') || queryLower.includes('degree') || queryLower.includes('university')) {
+      patterns.education = 0.3;
+    }
     
     return patterns;
   }
@@ -280,8 +253,8 @@ export class SmartWeighting {
     // Step 1: AI-powered intent analysis
     const intentAnalysis = await this.analyzeSemanticIntent(query);
     
-    // Step 2: Pattern recognition
-    const patternWeights = this.detectPatterns(query);
+    // Step 2: LLM-powered pattern recognition
+    const patternWeights = await this.detectPatterns(query);
     
     // Step 3: Contextual analysis
     const context = this.analyzeContext(query);
@@ -349,14 +322,18 @@ export class SmartWeighting {
     let primaryIntent: keyof DynamicWeights = 'skills';
     let confidence = 0.8;
     
-    if (queryLower.includes('senior') || queryLower.includes('experience')) {
+    // Basic keyword detection for simulation
+    if (queryLower.includes('remote') || queryLower.includes('location') || queryLower.includes('in ')) {
+      primaryIntent = 'location';
+      confidence = 0.9;
+    } else if (queryLower.includes('senior') || queryLower.includes('experience') || queryLower.includes('years')) {
       primaryIntent = 'experience';
       confidence = 0.9;
-    } else if (queryLower.includes('startup') || queryLower.includes('company')) {
+    } else if (queryLower.includes('startup') || queryLower.includes('company') || queryLower.includes('business')) {
       primaryIntent = 'company';
       confidence = 0.85;
-    } else if (queryLower.includes('remote') || queryLower.includes('location')) {
-      primaryIntent = 'location';
+    } else if (queryLower.includes('skill') || queryLower.includes('technology') || queryLower.includes('help')) {
+      primaryIntent = 'skills';
       confidence = 0.8;
     }
     
