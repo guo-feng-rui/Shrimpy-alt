@@ -167,9 +167,9 @@ export class VectorStorage {
       const results: WeightedSearchResult[] = [];
       
       for (const connectionVectors of filteredVectors) {
-        // For now, we'll use a simple approach - in the full implementation,
-        // we'd generate embeddings for the query and compare with each vector type
-        const score = this.calculateWeightedScore(query, connectionVectors, dynamicWeights);
+        // Calculate detailed similarities for each vector type
+        const similarities = this.calculateDetailedSimilarities(query, connectionVectors, dynamicWeights);
+        const score = similarities.totalScore;
         
         console.log(`🔍 Debug: Connection ${connectionVectors.connectionId} score: ${score.toFixed(4)}`);
         
@@ -179,13 +179,13 @@ export class VectorStorage {
             connection: connectionVectors.originalConnection || { name: connectionVectors.connectionId },
             score: vectorUtils.normalizeScore(score),
             breakdown: {
-              skillsScore: 0, // Will be calculated in full implementation
-              experienceScore: 0,
-              companyScore: 0,
-              locationScore: 0,
-              networkScore: 0,
-              goalScore: 0,
-              educationScore: 0
+              skillsScore: similarities.skills,
+              experienceScore: similarities.experience,
+              companyScore: similarities.company,
+              locationScore: similarities.location,
+              networkScore: similarities.network,
+              goalScore: similarities.goal,
+              educationScore: similarities.education
             },
             matchedVectors: [], // Will be populated in full implementation
             relevance: score > 0.7 ? 'high' : score > 0.5 ? 'medium' : 'low'
@@ -254,12 +254,12 @@ export class VectorStorage {
     });
   }
 
-  // Calculate weighted score using vector similarity
-  private static calculateWeightedScore(
+  // Calculate detailed similarities with individual scores
+  private static calculateDetailedSimilarities(
     query: string, 
     connectionVectors: ConnectionVectors, 
     weights: DynamicWeights
-  ): number {
+  ): { skills: number; experience: number; company: number; location: number; network: number; goal: number; education: number; totalScore: number } {
     let totalScore = 0;
     let totalWeight = 0;
     
@@ -349,7 +349,22 @@ export class VectorStorage {
       }
     });
     
-    return totalWeight > 0 ? totalScore / totalWeight : 0;
+    const finalScore = totalWeight > 0 ? totalScore / totalWeight : 0;
+    
+    return {
+      ...similarities,
+      totalScore: finalScore
+    };
+  }
+
+  // Keep the old method for backward compatibility
+  private static calculateWeightedScore(
+    query: string, 
+    connectionVectors: ConnectionVectors, 
+    weights: DynamicWeights
+  ): number {
+    const detailed = this.calculateDetailedSimilarities(query, connectionVectors, weights);
+    return detailed.totalScore;
   }
 
   // Get search statistics

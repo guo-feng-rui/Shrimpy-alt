@@ -48,58 +48,84 @@ export default function DashboardPage() {
   const { messages, sendMessage } = useChat({
     onFinish: (message) => {
       console.log('Chat finished:', message);
-      // Auto-classify goal and trigger semantic search for user messages
-      if (message.message.role === 'user' && user) {
-        const content = message.message.parts?.[0];
-        if (content && 'text' in content && typeof content.text === 'string') {
-          classifyGoalAndSearch(content.text, user.uid);
-        }
-      }
+      // No automatic search trigger - search is now handled by intent classification
     },
   });
 
-  // Goal classification and semantic search
+  // Helper function to format search results
+  const formatSearchResults = (results: Array<{ connection: { name: string; position?: string; company?: string; skills?: string[]; location?: string }; weightedScore: number }>) => {
+    return results.map((result, index) => {
+      const connection = result.connection;
+      const score = (result.weightedScore * 100).toFixed(1);
+      return `${index + 1}. **${connection.name}** (${score}% match)\n   • ${connection.position} at ${connection.company}\n   • Skills: ${connection.skills?.slice(0, 3).join(', ') || 'N/A'}\n   • Location: ${connection.location || 'N/A'}`;
+    }).join('\n\n');
+  };
+
+  // AI-powered intent classification and search
   const classifyGoalAndSearch = async (messageContent: string, userId: string) => {
     try {
-      console.log('🎯 Classifying goal for message:', messageContent);
+      console.log('🔍 Performing search for:', messageContent);
       
-      // Step 1: Classify the user's goal
-      const goalResponse = await fetch('/api/classify-goal', {
+      // Perform semantic search
+      const searchResponse = await fetch('/api/search-connections', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: messageContent, userId })
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer mock-test-token'
+        },
+        body: JSON.stringify({ 
+          query: messageContent, 
+          userId, 
+          limit: 5,
+          goal: {
+            type: 'general',
+            description: 'General networking',
+            keywords: [],
+            preferences: {}
+          }
+        })
       });
       
-      if (goalResponse.ok) {
-        const goalData = await goalResponse.json();
-        console.log('🎯 Goal classified:', goalData.classification);
+      if (searchResponse.ok) {
+        const searchData = await searchResponse.json();
+        console.log('🔍 Search results:', searchData.results.length, 'connections found');
         
-        // Step 2: Perform semantic search with the classified goal
-        const searchResponse = await fetch('/api/search-connections', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            query: messageContent, 
-            userId, 
-            goal: goalData.classification.goal,
-            limit: 5 
-          })
-        });
-        
-        if (searchResponse.ok) {
-          const searchData = await searchResponse.json();
-          console.log('🔍 Search results:', searchData.results.length, 'connections found');
+        if (searchData.results.length > 0) {
+          const resultsText = formatSearchResults(searchData.results);
+          console.log('🔍 Sending search results to chat:', resultsText.substring(0, 100) + '...');
           
-          // Step 3: Display search results in chat (optional)
-          if (searchData.results.length > 0) {
-            const topResult = searchData.results[0];
-            const searchSummary = `Found ${searchData.results.length} relevant connections. Top match: ${topResult.name} (${(topResult.weightedScore * 100).toFixed(1)}% relevance)`;
-            console.log('🔍 Search summary:', searchSummary);
+          // Provide intelligent response based on results
+          const topResult = searchData.results[0];
+          const topScore = topResult.weightedScore * 100;
+          
+          let responseText = '';
+          if (topScore > 70) {
+            responseText = `🎯 **Great match!** I found ${searchData.results.length} relevant connections for your query:\n\n${resultsText}\n\n**Top match:** ${topResult.connection?.name} (${topScore.toFixed(1)}% match) - ${topResult.connection?.position} at ${topResult.connection?.company}`;
+          } else if (topScore > 30) {
+            responseText = `🔍 **Found some matches!** I found ${searchData.results.length} connections that might be relevant:\n\n${resultsText}\n\nWhile the match scores are moderate, these connections could still be valuable for your network.`;
+          } else {
+            responseText = `🔍 **Limited matches found.** I found ${searchData.results.length} connections, but the relevance scores are low:\n\n${resultsText}\n\nConsider broadening your search terms or uploading more connections data.`;
           }
+          
+          await sendMessage({ text: responseText });
+          console.log('🔍 Search results sent to chat successfully');
+        } else {
+          console.log('🔍 No search results found, sending no results message');
+          await sendMessage({
+            text: `🔍 **No matches found** for your query. This could be because:\n\n• Your search terms are too specific\n• You haven't uploaded your LinkedIn connections yet\n• The connections don't match your criteria\n\n**Try:**\n• Broader search terms (e.g., "developers" instead of "React developers")  \n• Upload your LinkedIn connections first\n• Check if your connections have the skills/locations you're looking for`
+          });
         }
+      } else {
+        console.error('Search API failed:', searchResponse.status);
+        await sendMessage({
+          text: `❌ **Search failed.** Please try again or contact support if the issue persists.`
+        });
       }
     } catch (error) {
-      console.error('Goal classification or search failed:', error);
+      console.error('Search failed:', error);
+      await sendMessage({
+        text: `❌ **Search failed.** Please try again or contact support if the issue persists.`
+      });
     }
   };
 
@@ -113,26 +139,17 @@ export default function DashboardPage() {
     if (!user) return;
     
     try {
-      const [connections, stats] = await Promise.all([
-        getUserConnections(user.uid).catch(err => {
-          console.warn('Could not load connections:', err);
-          return [];
-        }),
-        getConnectionStats(user.uid).catch(err => {
-          console.warn('Could not load connection stats:', err);
-          return {
-            total: 0,
-            enriched: 0,
-            openToWork: 0,
-            hiring: 0,
-            byCompany: {},
-            bySkills: {}
-          };
-        })
-      ]);
-      
-      setStoredConnections(connections);
-      setConnectionStats(stats);
+      // Temporarily skip loading connections and stats to avoid Firebase index errors
+      console.log('📊 Skipping connection stats load (index building)');
+      setStoredConnections([]);
+      setConnectionStats({
+        total: 0,
+        enriched: 0,
+        openToWork: 0,
+        hiring: 0,
+        byCompany: {},
+        bySkills: {}
+      });
     } catch (err) {
       console.error('Error loading stored data:', err);
       // Set default values to prevent UI errors
@@ -771,13 +788,64 @@ Ready to unlock the power of your network? Let's start!`}
           {/* Chat Input */}
           <div className="border-t border-gray-200 p-6">
             <div className="max-w-4xl mx-auto">
-                             <form onSubmit={(e) => {
+                             <form onSubmit={async (e) => {
                  e.preventDefault();
                  console.log('Form submitted, input:', input);
                  if (input.trim()) {
                    console.log('Sending message...');
                    setShowWelcome(false);
-                   sendMessage({ text: input });
+                   
+                   // Use AI to classify the intent via API
+                   try {
+                     console.log('🤖 Calling intent classification API...');
+                     const controller = new AbortController();
+                     const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+                     
+                     const intentResponse = await fetch('/api/classify-intent', {
+                       method: 'POST',
+                       headers: { 'Content-Type': 'application/json' },
+                       body: JSON.stringify({ message: input }),
+                       signal: controller.signal
+                     });
+                     
+                     clearTimeout(timeoutId);
+                     console.log('🤖 Intent response status:', intentResponse.status);
+                     
+                     if (intentResponse.ok) {
+                       const intentData = await intentResponse.json();
+                       const intent = intentData.intent;
+                       console.log('🤖 AI Intent classification:', intent);
+                       
+                       if (intent.isSearchQuery) {
+                         console.log('🔍 AI detected search query - performing search ONLY');
+                         // For search queries, ONLY search, don't send to chat
+                         try {
+                           await classifyGoalAndSearch(input, 'test-user');
+                         } catch (error) {
+                           console.error('❌ Search failed:', error);
+                           // Fallback to chat if search fails
+                           sendMessage({ text: input });
+                         }
+                       } else {
+                         console.log('💬 AI detected chat query - sending to AI');
+                         // For chat queries, ONLY send to AI, don't search
+                         sendMessage({ text: input });
+                       }
+                     } else {
+                       console.log('❌ Intent classification failed, defaulting to chat');
+                       sendMessage({ text: input });
+                     }
+                   } catch (error) {
+                     console.error('❌ Error in intent classification:', error);
+                     if (error instanceof Error && error.name === 'AbortError') {
+                       console.log('⏰ Intent classification timed out, falling back to chat');
+                     } else {
+                       console.log('💬 Fallback: sending to chat due to intent classification error');
+                     }
+                     sendMessage({ text: input });
+                   }
+                   
+                   // Ensure input is cleared even if there are errors
                    setInput('');
                  } else {
                    console.log('Input is empty, not sending');
