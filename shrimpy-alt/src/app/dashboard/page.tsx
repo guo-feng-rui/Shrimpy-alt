@@ -10,7 +10,7 @@ import { useRouter } from 'next/navigation';
 import { getUserDisplayName } from '@/lib/utils';
 import { parseLinkedInCSV, validateConnections, getCSVPreview, generateSampleCSV, type Connection, type ParseResult } from '@/lib/csv-parser';
 import { enrichConnectionData, testProfileParsing } from '@/lib/profile-parser';
-import { useChat } from '@ai-sdk/react';
+// Removed useChat to avoid conflicts with manual message management
 import ReactMarkdown from 'react-markdown';
 
 import { storeConnections, getUserConnections, getConnectionStats, type StoredConnection } from '@/lib/firestore';
@@ -45,12 +45,73 @@ export default function DashboardPage() {
   const [input, setInput] = useState('');
   const router = useRouter();
 
-  const { messages, sendMessage } = useChat({
-    onFinish: (message) => {
-      console.log('Chat finished:', message);
-      // No automatic search trigger - search is now handled by intent classification
-    },
-  });
+  // Manual message management (no useChat hook to avoid conflicts)
+  const [messages, setMessages] = useState<Array<{
+    id: string;
+    role: 'user' | 'assistant';
+    content: string;
+    timestamp: Date;
+  }>>([]);
+
+  // Helper function to add assistant message without adding user message
+  const addAssistantMessage = (text: string) => {
+    const assistantMessage = {
+      id: Date.now().toString(),
+      role: 'assistant' as const,
+      content: text,
+      timestamp: new Date()
+    };
+    setMessages(prev => [...prev, assistantMessage]);
+  };
+
+  // Helper function to get AI response without adding user message (since we already added it)
+  const getAIResponse = async (text: string, currentMessages: Array<{id: string; role: 'user' | 'assistant'; content: string; timestamp: Date}>) => {
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: currentMessages
+        })
+      });
+      
+      if (response.ok) {
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder();
+        let aiResponse = '';
+        
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            const chunk = decoder.decode(value);
+            const lines = chunk.split('\n');
+            
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                try {
+                  const data = JSON.parse(line.slice(6));
+                  if (data.content) {
+                    aiResponse += data.content;
+                  }
+                } catch (e) {
+                  // Ignore parsing errors
+                }
+              }
+            }
+          }
+        }
+        
+        if (aiResponse) {
+          addAssistantMessage(aiResponse);
+        }
+      }
+    } catch (error) {
+      console.error('Error getting AI response:', error);
+      addAssistantMessage('Sorry, I encountered an error. Please try again.');
+    }
+  };
 
   // Helper function to format search results
   const formatSearchResults = (results: Array<{ connection: { name: string; position?: string; company?: string; skills?: string[]; location?: string }; weightedScore: number }>) => {
@@ -107,25 +168,19 @@ export default function DashboardPage() {
             responseText = `🔍 **Limited matches found.** I found ${searchData.results.length} connections, but the relevance scores are low:\n\n${resultsText}\n\nConsider broadening your search terms or uploading more connections data.`;
           }
           
-          await sendMessage({ text: responseText });
+          addAssistantMessage(responseText);
           console.log('🔍 Search results sent to chat successfully');
         } else {
           console.log('🔍 No search results found, sending no results message');
-          await sendMessage({
-            text: `🔍 **No matches found** for your query. This could be because:\n\n• Your search terms are too specific\n• You haven't uploaded your LinkedIn connections yet\n• The connections don't match your criteria\n\n**Try:**\n• Broader search terms (e.g., "developers" instead of "React developers")  \n• Upload your LinkedIn connections first\n• Check if your connections have the skills/locations you're looking for`
-          });
+          addAssistantMessage(`🔍 **No matches found** for your query. This could be because:\n\n• Your search terms are too specific\n• You haven't uploaded your LinkedIn connections yet\n• The connections don't match your criteria\n\n**Try:**\n• Broader search terms (e.g., "developers" instead of "React developers")  \n• Upload your LinkedIn connections first\n• Check if your connections have the skills/locations you're looking for`);
         }
       } else {
         console.error('Search API failed:', searchResponse.status);
-        await sendMessage({
-          text: `❌ **Search failed.** Please try again or contact support if the issue persists.`
-        });
+        addAssistantMessage(`❌ **Search failed.** Please try again or contact support if the issue persists.`);
       }
     } catch (error) {
       console.error('Search failed:', error);
-      await sendMessage({
-        text: `❌ **Search failed.** Please try again or contact support if the issue persists.`
-      });
+      addAssistantMessage(`❌ **Search failed.** Please try again or contact support if the issue persists.`);
     }
   };
 
@@ -193,7 +248,7 @@ export default function DashboardPage() {
     });
 
     return () => unsubscribe();
-  }, [router, messages.length, sendMessage, loadStoredData]);
+  }, [router, messages.length, loadStoredData]);
 
 
 
@@ -291,9 +346,7 @@ export default function DashboardPage() {
       setSuccess(true);
       
       // Start automatic enrichment
-      sendMessage({ 
-        text: `✅ Upload successful! ${connections.length} connections uploaded. Now automatically enriching profiles with detailed data...` 
-      });
+      addAssistantMessage(`✅ Upload successful! ${connections.length} connections uploaded. Now automatically enriching profiles with detailed data...`);
 
       // Automatically enrich connections
       await handleEnrichConnections();
@@ -302,17 +355,13 @@ export default function DashboardPage() {
       if (user) {
         try {
           await storeConnections(user.uid, enrichedConnections);
-          sendMessage({ 
-            text: `💾 Data stored securely in the cloud! Your connections are now searchable and will persist across sessions.` 
-          });
+          addAssistantMessage(`💾 Data stored securely in the cloud! Your connections are now searchable and will persist across sessions.`);
           
           // Load stored connections and stats
           await loadStoredData();
         } catch (err) {
           console.error('Storage error:', err);
-          sendMessage({ 
-            text: `⚠️ Data uploaded but storage failed. Your connections are still available for this session.` 
-          });
+          addAssistantMessage(`⚠️ Data uploaded but storage failed. Your connections are still available for this session.`);
         }
       }
       
@@ -361,9 +410,7 @@ export default function DashboardPage() {
         return;
       }
 
-      sendMessage({ 
-        text: `🔍 Starting to enrich ${connectionsWithUrls.length} connections with detailed profile data...` 
-      });
+      addAssistantMessage(`🔍 Starting to enrich ${connectionsWithUrls.length} connections with detailed profile data...`);
 
       // Enrich connections with progress updates
       const enriched = [];
@@ -399,16 +446,12 @@ export default function DashboardPage() {
 
       const successfulEnrichments = enriched.filter(conn => conn.enriched).length;
       
-      sendMessage({ 
-        text: `✅ Successfully enriched ${successfulEnrichments} out of ${connectionsWithUrls.length} connections! You now have detailed profile data including skills, experience, and locations.` 
-      });
+      addAssistantMessage(`✅ Successfully enriched ${successfulEnrichments} out of ${connectionsWithUrls.length} connections! You now have detailed profile data including skills, experience, and locations.`);
 
     } catch (err) {
       console.error('Enrichment error:', err);
       setError('Failed to enrich connections. Please try again.');
-      sendMessage({ 
-        text: '❌ Failed to enrich connections. This might be due to API rate limits or network issues. You can still use your basic connection data.' 
-      });
+      addAssistantMessage('❌ Failed to enrich connections. This might be due to API rate limits or network issues. You can still use your basic connection data.');
     } finally {
       setIsEnriching(false);
     }
@@ -746,24 +789,21 @@ Ready to unlock the power of your network? Let's start!`}
               )}
               
               {messages.map((message, index) => (
-                <div key={message.id || index} className={`mb-6 ${message.role === 'user' ? 'text-right' : 'text-left'}`}>
-                  <div className={`inline-block max-w-3xl rounded-lg px-4 py-3 ${
-                    message.role === 'user' 
-                      ? 'bg-blue-600 text-white' 
-                      : 'bg-gray-100 text-gray-900'
-                  }`}>
-                    <div className="text-sm prose prose-sm max-w-none dark:prose-invert">
-                                             {message.parts?.map((part, partIndex) => 
-                         part.type === 'text' ? (
-                           <ReactMarkdown key={partIndex}>
-                             {part.text}
-                           </ReactMarkdown>
-                         ) : null
-                       )}
+                  <div key={message.id || index} className={`mb-6 ${message.role === 'user' ? 'text-right' : 'text-left'}`}>
+                    <div className={`inline-block max-w-3xl rounded-lg px-4 py-3 ${
+                      message.role === 'user' 
+                        ? 'bg-blue-600 text-white' 
+                        : 'bg-gray-100 text-gray-900'
+                    }`}>
+                      <div className="text-sm prose prose-sm max-w-none dark:prose-invert">
+                        <ReactMarkdown>
+                          {message.content}
+                        </ReactMarkdown>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                )
+              )}
               
                              {false && (
                 <div className="mb-6 text-left">
@@ -793,57 +833,67 @@ Ready to unlock the power of your network? Let's start!`}
                  console.log('Form submitted, input:', input);
                  if (input.trim()) {
                    console.log('Sending message...');
-                   setShowWelcome(false);
-                   
-                   // Use AI to classify the intent via API
-                   try {
-                     console.log('🤖 Calling intent classification API...');
-                     const controller = new AbortController();
-                     const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+                                        setShowWelcome(false);
                      
-                     const intentResponse = await fetch('/api/classify-intent', {
-                       method: 'POST',
-                       headers: { 'Content-Type': 'application/json' },
-                       body: JSON.stringify({ message: input }),
-                       signal: controller.signal
-                     });
+                                         // ALWAYS display the user's message first
+                    const userMessage = { 
+                      id: Date.now().toString(),
+                      role: 'user' as const, 
+                      content: input, 
+                      timestamp: new Date() 
+                    };
+                    const updatedMessages = [...messages, userMessage];
+                    setMessages(updatedMessages);
                      
-                     clearTimeout(timeoutId);
-                     console.log('🤖 Intent response status:', intentResponse.status);
-                     
-                     if (intentResponse.ok) {
-                       const intentData = await intentResponse.json();
-                       const intent = intentData.intent;
-                       console.log('🤖 AI Intent classification:', intent);
+                     // Use AI to classify the intent via API
+                     try {
+                       console.log('🤖 Calling intent classification API...');
+                       const controller = new AbortController();
+                       const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
                        
-                       if (intent.isSearchQuery) {
-                         console.log('🔍 AI detected search query - performing search ONLY');
-                         // For search queries, ONLY search, don't send to chat
-                         try {
-                           await classifyGoalAndSearch(input, 'test-user');
-                         } catch (error) {
-                           console.error('❌ Search failed:', error);
-                           // Fallback to chat if search fails
-                           sendMessage({ text: input });
+                       const intentResponse = await fetch('/api/classify-intent', {
+                         method: 'POST',
+                         headers: { 'Content-Type': 'application/json' },
+                         body: JSON.stringify({ message: input }),
+                         signal: controller.signal
+                       });
+                       
+                       clearTimeout(timeoutId);
+                       console.log('🤖 Intent response status:', intentResponse.status);
+                       
+                       if (intentResponse.ok) {
+                         const intentData = await intentResponse.json();
+                         const intent = intentData.intent;
+                         console.log('🤖 AI Intent classification:', intent);
+                         
+                         if (intent.isSearchQuery) {
+                           console.log('🔍 AI detected search query - performing search ONLY');
+                           // For search queries, perform search and display results
+                           try {
+                             await classifyGoalAndSearch(input, 'test-user');
+                           } catch (error) {
+                             console.error('❌ Search failed:', error);
+                             // Fallback to chat if search fails
+                             await getAIResponse(input, updatedMessages);
+                           }
+                         } else {
+                           console.log('💬 AI detected chat query - sending to AI');
+                           // For chat queries, send to AI and display response
+                           await getAIResponse(input, updatedMessages);
                          }
                        } else {
-                         console.log('💬 AI detected chat query - sending to AI');
-                         // For chat queries, ONLY send to AI, don't search
-                         sendMessage({ text: input });
+                         console.log('❌ Intent classification failed, defaulting to chat');
+                         await getAIResponse(input, updatedMessages);
                        }
-                     } else {
-                       console.log('❌ Intent classification failed, defaulting to chat');
-                       sendMessage({ text: input });
+                     } catch (error) {
+                       console.error('❌ Error in intent classification:', error);
+                       if (error instanceof Error && error.name === 'AbortError') {
+                         console.log('⏰ Intent classification timed out, falling back to chat');
+                       } else {
+                         console.log('💬 Fallback: sending to chat due to intent classification error');
+                       }
+                       await getAIResponse(input, updatedMessages);
                      }
-                   } catch (error) {
-                     console.error('❌ Error in intent classification:', error);
-                     if (error instanceof Error && error.name === 'AbortError') {
-                       console.log('⏰ Intent classification timed out, falling back to chat');
-                     } else {
-                       console.log('💬 Fallback: sending to chat due to intent classification error');
-                     }
-                     sendMessage({ text: input });
-                   }
                    
                    // Ensure input is cleared even if there are errors
                    setInput('');
@@ -884,11 +934,17 @@ Ready to unlock the power of your network? Let's start!`}
                   variant="outline" 
                   size="sm" 
                   className="w-full justify-start"
-                  onClick={() => {
+                  onClick={async () => {
                     setShowWelcome(false);
-                    sendMessage({
-                      text: 'How do I upload my LinkedIn connections?'
-                    });
+                    const userMessage = {
+                      id: Date.now().toString(),
+                      role: 'user' as const,
+                      content: 'How do I upload my LinkedIn connections?',
+                      timestamp: new Date()
+                    };
+                    const updatedMessages = [...messages, userMessage];
+                    setMessages(updatedMessages);
+                    await getAIResponse('How do I upload my LinkedIn connections?', updatedMessages);
                   }}
                 >
                   <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -901,11 +957,17 @@ Ready to unlock the power of your network? Let's start!`}
                      variant="outline" 
                      size="sm" 
                      className="w-full justify-start"
-                     onClick={() => {
+                     onClick={async () => {
                        setShowWelcome(false);
-                       sendMessage({
-                         text: 'What should I include in my mission?'
-                       });
+                       const userMessage = {
+                         id: Date.now().toString(),
+                         role: 'user' as const,
+                         content: 'What should I include in my mission?',
+                         timestamp: new Date()
+                       };
+                       const updatedMessages = [...messages, userMessage];
+                       setMessages(updatedMessages);
+                       await getAIResponse('What should I include in my mission?', updatedMessages);
                      }}
                    >
                      <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
