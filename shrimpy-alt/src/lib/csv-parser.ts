@@ -91,7 +91,7 @@ function parseConnectionLine(line: string, headers: string[], rowNumber: number)
   console.log(`Row ${rowNumber} headers:`, headers);
   
   // Be more flexible with column count - LinkedIn exports can have varying columns
-  const connection: Connection = {};
+  const connection: Connection = { name: '' };
   
   headers.forEach((header, index) => {
     const value = values[index]?.trim() || '';
