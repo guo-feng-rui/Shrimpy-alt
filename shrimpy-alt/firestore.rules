@@ -59,5 +59,25 @@ service cloud.firestore {
     match /{document=**} {
       allow read, write: if request.auth != null;
     }
+    
+    // Allow all access for testing (remove in production)
+    match /test-data/{document} {
+      allow read, write: if true;
+    }
+    
+    // Allow all access to profileCache for testing
+    match /profileCache/{document} {
+      allow read, write: if true;
+    }
+    
+    // Allow all access to connection_vectors for testing
+    match /connection_vectors/{document} {
+      allow read, write: if true;
+    }
+    
+    // Allow all access to test-connections for testing
+    match /test-connections/{document} {
+      allow read, write: if true;
+    }
   }
 } 

@@ -45,7 +45,63 @@ export default function DashboardPage() {
   const [input, setInput] = useState('');
   const router = useRouter();
 
-  const { messages, sendMessage } = useChat();
+  const { messages, sendMessage } = useChat({
+    onFinish: (message) => {
+      console.log('Chat finished:', message);
+      // Auto-classify goal and trigger semantic search for user messages
+      if (message.message.role === 'user' && user) {
+        const content = message.message.parts?.[0];
+        if (content && 'text' in content && typeof content.text === 'string') {
+          classifyGoalAndSearch(content.text, user.uid);
+        }
+      }
+    },
+  });
+
+  // Goal classification and semantic search
+  const classifyGoalAndSearch = async (messageContent: string, userId: string) => {
+    try {
+      console.log('🎯 Classifying goal for message:', messageContent);
+      
+      // Step 1: Classify the user's goal
+      const goalResponse = await fetch('/api/classify-goal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: messageContent, userId })
+      });
+      
+      if (goalResponse.ok) {
+        const goalData = await goalResponse.json();
+        console.log('🎯 Goal classified:', goalData.classification);
+        
+        // Step 2: Perform semantic search with the classified goal
+        const searchResponse = await fetch('/api/search-connections', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            query: messageContent, 
+            userId, 
+            goal: goalData.classification.goal,
+            limit: 5 
+          })
+        });
+        
+        if (searchResponse.ok) {
+          const searchData = await searchResponse.json();
+          console.log('🔍 Search results:', searchData.results.length, 'connections found');
+          
+          // Step 3: Display search results in chat (optional)
+          if (searchData.results.length > 0) {
+            const topResult = searchData.results[0];
+            const searchSummary = `Found ${searchData.results.length} relevant connections. Top match: ${topResult.name} (${(topResult.weightedScore * 100).toFixed(1)}% relevance)`;
+            console.log('🔍 Search summary:', searchSummary);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Goal classification or search failed:', error);
+    }
+  };
 
   // Debug logging
   useEffect(() => {

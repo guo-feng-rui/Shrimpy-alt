@@ -2,8 +2,8 @@
 
 export interface VectorEmbedding {
   vector: number[];  // The actual embedding vector
-  dimension: number;  // Vector dimension (e.g., 1536 for text-embedding-ada-002)
-  model: string;     // Model used (e.g., "text-embedding-ada-002")
+  dimension: number;  // Vector dimension (e.g., 3072 for text-embedding-3-large)
+  model: string;     // Model used (e.g., "text-embedding-3-large")
   timestamp: Date;   // When the embedding was generated
 }
 

@@ -9,6 +9,7 @@ import {
   DynamicWeights
 } from './vector-schema';
 import { SmartWeighting } from './smart-weighting';
+import { cosineSimilarity } from 'ai';
 import { 
   collection, 
   doc, 
@@ -144,7 +145,7 @@ export class VectorStorage {
   // Search connections with weighted similarity
   static async searchConnections(searchQuery: SearchQuery): Promise<WeightedSearchResult[]> {
     try {
-      const { query, userId, goal, filters, limit = 10, threshold = 0.3 } = searchQuery;
+      const { query, userId, goal, filters, limit = 10, threshold = 0.01 } = searchQuery;
       
       // Get user's connection vectors
       const userVectors = await this.getUserConnectionVectors(userId);
@@ -170,10 +171,12 @@ export class VectorStorage {
         // we'd generate embeddings for the query and compare with each vector type
         const score = this.calculateWeightedScore(query, connectionVectors, dynamicWeights);
         
+        console.log(`🔍 Debug: Connection ${connectionVectors.connectionId} score: ${score.toFixed(4)}`);
+        
         if (score >= threshold) {
           results.push({
             connectionId: connectionVectors.connectionId,
-            connection: connectionVectors.originalConnection,
+            connection: connectionVectors.originalConnection || { name: connectionVectors.connectionId },
             score: vectorUtils.normalizeScore(score),
             breakdown: {
               skillsScore: 0, // Will be calculated in full implementation
@@ -251,36 +254,102 @@ export class VectorStorage {
     });
   }
 
-  // Calculate weighted score (placeholder for now)
+  // Calculate weighted score using vector similarity
   private static calculateWeightedScore(
     query: string, 
     connectionVectors: ConnectionVectors, 
     weights: DynamicWeights
   ): number {
-    // This is a placeholder - in the full implementation, we'd:
-    // 1. Generate embeddings for the query
-    // 2. Compare with each vector type
-    // 3. Apply weights and return weighted score
+    let totalScore = 0;
+    let totalWeight = 0;
     
-    // For now, return a simple score based on text matching
-    const queryLower = query.toLowerCase();
-    let score = 0;
+    // Calculate similarity for each vector type
+    const similarities = {
+      skills: 0,
+      experience: 0,
+      company: 0,
+      location: 0,
+      network: 0,
+      goal: 0,
+      education: 0
+    };
     
-    // Simple text matching for demonstration
-    if (connectionVectors.skills.some(skill => skill.toLowerCase().includes(queryLower))) {
-      score += weights.skills;
-    }
-    if (connectionVectors.companies.some(company => company.toLowerCase().includes(queryLower))) {
-      score += weights.company;
-    }
-    if (connectionVectors.locations.some(location => location.toLowerCase().includes(queryLower))) {
-      score += weights.location;
-    }
-    if (connectionVectors.education.some(edu => edu.toLowerCase().includes(queryLower))) {
-      score += weights.education;
+    // Skills similarity
+    if (connectionVectors.skillsVector?.vector && weights.skills > 0) {
+      try {
+        // For now, use a simple approach - in full implementation, we'd generate query embeddings
+        const skillsText = connectionVectors.skills.join(' ');
+        const queryWords = query.toLowerCase().split(' ');
+        const skillsWords = skillsText.toLowerCase().split(' ');
+        
+        // Calculate overlap with better matching
+        const overlap = queryWords.filter(word => 
+          skillsWords.some(skillWord => 
+            skillWord.includes(word) || word.includes(skillWord)
+          )
+        ).length;
+        similarities.skills = overlap / Math.max(queryWords.length, skillsWords.length);
+      } catch (error) {
+        console.error('Error calculating skills similarity:', error);
+      }
     }
     
-    return score;
+    // Location similarity (important for location-based queries)
+    if (connectionVectors.locationVector?.vector && weights.location > 0) {
+      try {
+        const locationText = connectionVectors.locations.join(' ');
+        const queryWords = query.toLowerCase().split(' ');
+        const locationWords = locationText.toLowerCase().split(' ');
+        
+        const overlap = queryWords.filter(word => 
+          locationWords.some(locationWord => 
+            locationWord.includes(word) || word.includes(locationWord)
+          )
+        ).length;
+        similarities.location = overlap / Math.max(queryWords.length, locationWords.length);
+      } catch (error) {
+        console.error('Error calculating location similarity:', error);
+      }
+    }
+    
+    // Company similarity
+    if (connectionVectors.companyVector?.vector && weights.company > 0) {
+      try {
+        const companyText = connectionVectors.companies.join(' ');
+        const queryWords = query.toLowerCase().split(' ');
+        const companyWords = companyText.toLowerCase().split(' ');
+        
+        const overlap = queryWords.filter(word => companyWords.includes(word)).length;
+        similarities.company = overlap / Math.max(queryWords.length, companyWords.length);
+      } catch (error) {
+        console.error('Error calculating company similarity:', error);
+      }
+    }
+    
+    // Education similarity
+    if (connectionVectors.educationVector?.vector && weights.education > 0) {
+      try {
+        const educationText = connectionVectors.education.join(' ');
+        const queryWords = query.toLowerCase().split(' ');
+        const educationWords = educationText.toLowerCase().split(' ');
+        
+        const overlap = queryWords.filter(word => educationWords.includes(word)).length;
+        similarities.education = overlap / Math.max(queryWords.length, educationWords.length);
+      } catch (error) {
+        console.error('Error calculating education similarity:', error);
+      }
+    }
+    
+    // Calculate weighted score
+    Object.entries(similarities).forEach(([key, similarity]) => {
+      const weight = weights[key as keyof DynamicWeights];
+      if (weight > 0) {
+        totalScore += similarity * weight;
+        totalWeight += weight;
+      }
+    });
+    
+    return totalWeight > 0 ? totalScore / totalWeight : 0;
   }
 
   // Get search statistics

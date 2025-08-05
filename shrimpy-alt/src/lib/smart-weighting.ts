@@ -53,8 +53,9 @@ export class SmartWeighting {
   // Method 1: AI-Powered Semantic Intent Analysis
   static async analyzeSemanticIntent(query: string): Promise<IntentAnalysis> {
     try {
-      // Call our AI analysis endpoint
-      const response = await fetch('/api/analyze-intent', {
+      // For server-side calls, we need to use absolute URLs
+      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+      const response = await fetch(`${baseUrl}/api/analyze-intent`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -97,7 +98,8 @@ export class SmartWeighting {
     
     try {
       // Use LLM to analyze the query for semantic patterns
-      const response = await fetch('/api/analyze-patterns', {
+      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+      const response = await fetch(`${baseUrl}/api/analyze-patterns`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

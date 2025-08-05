@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 const azure = createAzure({
   resourceName: process.env.AZURE_RESOURCE_NAME || 'shrimpy-dev-tmp-resource',
   apiKey: process.env.AZURE_OPENAI_API_KEY,
+  apiVersion: '2024-04-01-preview',
 });
 
 export async function POST(req: NextRequest) {
@@ -86,7 +87,15 @@ IMPORTANT:
 
     let patterns;
     try {
-      patterns = JSON.parse(responseText);
+      // Clean up the response text - remove markdown code blocks if present
+      let cleanResponse = responseText.trim();
+      if (cleanResponse.startsWith('```json')) {
+        cleanResponse = cleanResponse.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+      } else if (cleanResponse.startsWith('```')) {
+        cleanResponse = cleanResponse.replace(/^```\s*/, '').replace(/\s*```$/, '');
+      }
+      
+      patterns = JSON.parse(cleanResponse);
     } catch (error) {
       console.error('Failed to parse LLM response:', responseText);
       return NextResponse.json({
