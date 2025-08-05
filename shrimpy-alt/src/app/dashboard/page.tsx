@@ -4,15 +4,16 @@ import { useState, useEffect, useCallback } from 'react';
 import { auth } from '../../../firebase.config';
 import { signOut, User } from 'firebase/auth';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { useRouter } from 'next/navigation';
 import { getUserDisplayName } from '@/lib/utils';
 import { parseLinkedInCSV, validateConnections, getCSVPreview, generateSampleCSV, type Connection, type ParseResult } from '@/lib/csv-parser';
-import { enrichConnectionsBatch, enrichConnectionData, type ProfileData, testProfileParsing } from '@/lib/profile-parser';
+import { enrichConnectionData, testProfileParsing } from '@/lib/profile-parser';
+import { useChat } from '@ai-sdk/react';
+import ReactMarkdown from 'react-markdown';
 
-import { storeConnections, getUserConnections, searchConnections, getConnectionStats, type StoredConnection } from '@/lib/firestore';
+import { storeConnections, getUserConnections, getConnectionStats, type StoredConnection } from '@/lib/firestore';
 
 export default function DashboardPage() {
   const [user, setUser] = useState<User | null>(null);
@@ -27,9 +28,6 @@ export default function DashboardPage() {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [previewData, setPreviewData] = useState<Connection[]>([]);
   const [parseResult, setParseResult] = useState<ParseResult | null>(null);
-  const [messages, setMessages] = useState<Array<{type: 'user' | 'assistant', content: string, timestamp: Date}>>([]);
-  const [inputMessage, setInputMessage] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
   const [showUploadDialog, setShowUploadDialog] = useState(false);
   const [isEnriching, setIsEnriching] = useState(false);
   const [enrichmentProgress, setEnrichmentProgress] = useState(0);
@@ -43,7 +41,57 @@ export default function DashboardPage() {
     byCompany: Record<string, number>;
     bySkills: Record<string, number>;
   } | null>(null);
+  const [showWelcome, setShowWelcome] = useState(true);
+  const [input, setInput] = useState('');
   const router = useRouter();
+
+  const { messages, sendMessage } = useChat();
+
+  // Debug logging
+  useEffect(() => {
+    console.log('Chat status:', status);
+    console.log('Messages count:', messages.length);
+  }, [status, messages.length]);
+  
+
+  const loadStoredData = useCallback(async () => {
+    if (!user) return;
+    
+    try {
+      const [connections, stats] = await Promise.all([
+        getUserConnections(user.uid).catch(err => {
+          console.warn('Could not load connections:', err);
+          return [];
+        }),
+        getConnectionStats(user.uid).catch(err => {
+          console.warn('Could not load connection stats:', err);
+          return {
+            total: 0,
+            enriched: 0,
+            openToWork: 0,
+            hiring: 0,
+            byCompany: {},
+            bySkills: {}
+          };
+        })
+      ]);
+      
+      setStoredConnections(connections);
+      setConnectionStats(stats);
+    } catch (err) {
+      console.error('Error loading stored data:', err);
+      // Set default values to prevent UI errors
+      setStoredConnections([]);
+      setConnectionStats({
+        total: 0,
+        enriched: 0,
+        openToWork: 0,
+        hiring: 0,
+        byCompany: {},
+        bySkills: {}
+      });
+    }
+  }, [user]);
 
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((user) => {
@@ -52,24 +100,28 @@ export default function DashboardPage() {
       if (!user) {
         router.push('/login');
       } else {
-        setShowQuickStart(true);
-        // Add welcome message
-                 setMessages([{
-           type: 'assistant',
-           content: `Welcome to Weak-Tie Activator, ${getUserDisplayName(user)}! I'm here to help you discover and activate your most valuable connections. Upload your LinkedIn data and I'll automatically enrich it with detailed profile information. Then describe your goals to get personalized recommendations!`,
-           timestamp: new Date()
-         }]);
+        // Only show Quick Start Guide once per session
+        const hasSeenQuickStart = sessionStorage.getItem('hasSeenQuickStart');
+        if (!hasSeenQuickStart) {
+          setShowQuickStart(true);
+          sessionStorage.setItem('hasSeenQuickStart', 'true');
+        }
         
-                 // Test profile parsing on load
-         testProfileParsing();
-         
-         // Load stored connections and stats
-         loadStoredData();
+        // Add welcome message - do this differently to avoid it appearing as user message
+        if (messages.length === 0) {
+          // We'll let the first user interaction trigger the welcome, not send it automatically
+        }
+        
+        // Test profile parsing on load
+        testProfileParsing();
+        
+        // Load stored connections and stats
+        loadStoredData();
       }
     });
 
     return () => unsubscribe();
-  }, [router]);
+  }, [router, messages.length, sendMessage, loadStoredData]);
 
 
 
@@ -167,11 +219,9 @@ export default function DashboardPage() {
       setSuccess(true);
       
       // Start automatic enrichment
-      setMessages(prev => [...prev, {
-        type: 'assistant',
-        content: `✅ Upload successful! ${connections.length} connections uploaded. Now automatically enriching profiles with detailed data...`,
-        timestamp: new Date()
-      }]);
+      sendMessage({ 
+        text: `✅ Upload successful! ${connections.length} connections uploaded. Now automatically enriching profiles with detailed data...` 
+      });
 
       // Automatically enrich connections
       await handleEnrichConnections();
@@ -180,21 +230,17 @@ export default function DashboardPage() {
       if (user) {
         try {
           await storeConnections(user.uid, enrichedConnections);
-          setMessages(prev => [...prev, {
-            type: 'assistant',
-            content: `💾 Data stored securely in the cloud! Your connections are now searchable and will persist across sessions.`,
-            timestamp: new Date()
-          }]);
+          sendMessage({ 
+            text: `💾 Data stored securely in the cloud! Your connections are now searchable and will persist across sessions.` 
+          });
           
           // Load stored connections and stats
           await loadStoredData();
         } catch (err) {
           console.error('Storage error:', err);
-          setMessages(prev => [...prev, {
-            type: 'assistant',
-            content: `⚠️ Data uploaded but storage failed. Your connections are still available for this session.`,
-            timestamp: new Date()
-          }]);
+          sendMessage({ 
+            text: `⚠️ Data uploaded but storage failed. Your connections are still available for this session.` 
+          });
         }
       }
       
@@ -216,22 +262,6 @@ export default function DashboardPage() {
     a.click();
     document.body.removeChild(a);
     window.URL.revokeObjectURL(url);
-  };
-
-  const loadStoredData = async () => {
-    if (!user) return;
-    
-    try {
-      const [connections, stats] = await Promise.all([
-        getUserConnections(user.uid),
-        getConnectionStats(user.uid)
-      ]);
-      
-      setStoredConnections(connections);
-      setConnectionStats(stats);
-    } catch (err) {
-      console.error('Error loading stored data:', err);
-    }
   };
 
   const handleEnrichConnections = async () => {
@@ -259,11 +289,9 @@ export default function DashboardPage() {
         return;
       }
 
-      setMessages(prev => [...prev, {
-        type: 'assistant',
-        content: `🔍 Starting to enrich ${connectionsWithUrls.length} connections with detailed profile data...`,
-        timestamp: new Date()
-      }]);
+      sendMessage({ 
+        text: `🔍 Starting to enrich ${connectionsWithUrls.length} connections with detailed profile data...` 
+      });
 
       // Enrich connections with progress updates
       const enriched = [];
@@ -299,20 +327,16 @@ export default function DashboardPage() {
 
       const successfulEnrichments = enriched.filter(conn => conn.enriched).length;
       
-      setMessages(prev => [...prev, {
-        type: 'assistant',
-        content: `✅ Successfully enriched ${successfulEnrichments} out of ${connectionsWithUrls.length} connections! You now have detailed profile data including skills, experience, and locations.`,
-        timestamp: new Date()
-      }]);
+      sendMessage({ 
+        text: `✅ Successfully enriched ${successfulEnrichments} out of ${connectionsWithUrls.length} connections! You now have detailed profile data including skills, experience, and locations.` 
+      });
 
     } catch (err) {
       console.error('Enrichment error:', err);
       setError('Failed to enrich connections. Please try again.');
-      setMessages(prev => [...prev, {
-        type: 'assistant',
-        content: '❌ Failed to enrich connections. This might be due to API rate limits or network issues. You can still use your basic connection data.',
-        timestamp: new Date()
-      }]);
+      sendMessage({ 
+        text: '❌ Failed to enrich connections. This might be due to API rate limits or network issues. You can still use your basic connection data.' 
+      });
     } finally {
       setIsEnriching(false);
     }
@@ -333,57 +357,6 @@ export default function DashboardPage() {
 
 
 
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!inputMessage.trim()) return;
-
-    const userMessage = inputMessage.trim();
-    setInputMessage('');
-    
-    // Add user message to chat
-    setMessages(prev => [...prev, {
-      type: 'user',
-      content: userMessage,
-      timestamp: new Date()
-    }]);
-
-    setIsTyping(true);
-
-    try {
-      // Simulate AI response
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      let response = '';
-      
-             if (userMessage.toLowerCase().includes('upload') || userMessage.toLowerCase().includes('csv')) {
-         response = "I can help you upload your LinkedIn connections! Click the 'Upload LinkedIn Data' button in the left panel to get started. Your connections will be automatically enriched with detailed profile data including skills, experience, and locations.";
-       } else if (userMessage.toLowerCase().includes('enrich') || userMessage.toLowerCase().includes('profile')) {
-         response = "Great news! Profile enrichment now happens automatically when you upload your LinkedIn connections. You'll get detailed data including skills, experience, locations, and more for each connection without any extra steps.";
-       } else if (userMessage.toLowerCase().includes('mission') || userMessage.toLowerCase().includes('goal')) {
-         response = "Great! I can help you create a mission to find the best connections. Describe what you're trying to achieve - whether it's career advancement, networking, or finding specific expertise.";
-       } else if (userMessage.toLowerCase().includes('recommendation') || userMessage.toLowerCase().includes('suggest')) {
-         response = "I'll analyze your connections and mission to provide personalized recommendations. Make sure you've uploaded your LinkedIn data first, then describe your goals.";
-       } else {
-         response = "I'm here to help you activate your weak ties! You can upload your LinkedIn connections, enrich profiles with detailed data, describe your mission, and get personalized recommendations. What would you like to do?";
-       }
-
-      setMessages(prev => [...prev, {
-        type: 'assistant',
-        content: response,
-        timestamp: new Date()
-      }]);
-      
-    } catch (err) {
-      setMessages(prev => [...prev, {
-        type: 'assistant',
-        content: 'Sorry, I encountered an error. Please try again.',
-        timestamp: new Date()
-      }]);
-    } finally {
-      setIsTyping(false);
-    }
-  };
 
   if (loading) {
     return (
@@ -413,81 +386,101 @@ export default function DashboardPage() {
             </div>
             
                          <div className="flex items-center space-x-4">
-               <Dialog open={showQuickStart} onOpenChange={setShowQuickStart}>
-                 <DialogTrigger asChild>
-                   <Button variant="outline" size="sm" className="text-blue-600 border-blue-200 hover:bg-blue-50">
-                     <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                     </svg>
-                     Quick Start
-                   </Button>
-                 </DialogTrigger>
-                 <DialogContent className="max-w-2xl">
-                   <DialogHeader>
-                     <DialogTitle className="text-2xl font-bold">Quick Start Guide</DialogTitle>
-                     <DialogDescription>
-                       Follow these steps to start using Weak-Tie Activator
-                     </DialogDescription>
-                   </DialogHeader>
-                   <div className="space-y-6">
-                     <div className="space-y-4">
-                       <div className="flex items-start space-x-4">
-                         <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0">
-                           1
+               <div className="flex items-center">
+                 <Dialog open={showQuickStart} onOpenChange={setShowQuickStart}>
+                   <DialogTrigger asChild>
+                     <Button variant="outline" size="sm" className="text-blue-600 border-blue-200 hover:bg-blue-50">
+                       <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                       </svg>
+                       Quick Start
+                     </Button>
+                   </DialogTrigger>
+                   <DialogContent className="max-w-2xl">
+                     <DialogHeader>
+                       <DialogTitle className="text-2xl font-bold">Quick Start Guide</DialogTitle>
+                       <DialogDescription>
+                         Follow these steps to start using Weak-Tie Activator
+                       </DialogDescription>
+                     </DialogHeader>
+                     <div className="space-y-6">
+                       <div className="space-y-4">
+                         <div className="flex items-start space-x-4">
+                           <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0">
+                             1
+                           </div>
+                           <div>
+                             <h4 className="font-semibold text-lg">Export LinkedIn Connections</h4>
+                             <p className="text-gray-600">
+                               Export your LinkedIn connections list as a CSV file
+                             </p>
+                           </div>
                          </div>
-                         <div>
-                           <h4 className="font-semibold text-lg">Export LinkedIn Connections</h4>
-                           <p className="text-gray-600">
-                             Export your LinkedIn connections list as a CSV file
-                           </p>
+                         
+                         <div className="flex items-start space-x-4">
+                           <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0">
+                             2
+                           </div>
+                           <div>
+                                   <h4 className="font-semibold text-lg">Upload & Enrich</h4>
+                             <p className="text-gray-600">
+                                     Upload the CSV file and we&apos;ll automatically enrich profiles with detailed data
+                             </p>
+                           </div>
+                         </div>
+                         
+                         <div className="flex items-start space-x-4">
+                           <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0">
+                             3
+                           </div>
+                           <div>
+                            <h4 className="font-semibold text-lg">Chat with AI</h4>
+                             <p className="text-gray-600">
+                              Describe your goals in the chat and get personalized recommendations
+                             </p>
+                           </div>
                          </div>
                        </div>
                        
-                       <div className="flex items-start space-x-4">
-                         <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0">
-                           2
-                         </div>
-                         <div>
-                                 <h4 className="font-semibold text-lg">Upload & Enrich</h4>
-                           <p className="text-gray-600">
-                                   Upload the CSV file and we&apos;ll automatically enrich profiles with detailed data
-                           </p>
-                         </div>
+                       <div className="bg-blue-50 p-4 rounded-lg">
+                         <h5 className="font-semibold text-blue-900 mb-2">💡 Pro Tips:</h5>
+                         <ul className="text-sm text-blue-800 space-y-1">
+                           <li>• Make sure your CSV file includes connection names and companies</li>
+                           <li>• Be specific about your mission goals for better recommendations</li>
+                           <li>• Review and reach out to your top recommendations within 24 hours</li>
+                         </ul>
                        </div>
                        
-                       <div className="flex items-start space-x-4">
-                         <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0">
-                           3
-                         </div>
-                         <div>
-                          <h4 className="font-semibold text-lg">Chat with AI</h4>
-                           <p className="text-gray-600">
-                            Describe your goals in the chat and get personalized recommendations
-                           </p>
-                         </div>
+                       <div className="flex justify-end">
+                         <Button 
+                           variant="outline" 
+                           onClick={() => {
+                             setShowQuickStart(false);
+                             // Ensure the session storage is set to prevent reopening
+                             sessionStorage.setItem('hasSeenQuickStart', 'true');
+                           }}
+                         >
+                           Got it!
+                         </Button>
                        </div>
                      </div>
-                     
-                     <div className="bg-blue-50 p-4 rounded-lg">
-                       <h5 className="font-semibold text-blue-900 mb-2">💡 Pro Tips:</h5>
-                       <ul className="text-sm text-blue-800 space-y-1">
-                         <li>• Make sure your CSV file includes connection names and companies</li>
-                         <li>• Be specific about your mission goals for better recommendations</li>
-                         <li>• Review and reach out to your top recommendations within 24 hours</li>
-                       </ul>
-                     </div>
-                     
-                     <div className="flex justify-end">
-                       <Button 
-                         variant="outline" 
-                         onClick={() => setShowQuickStart(false)}
-                       >
-                         Got it!
-                       </Button>
-                     </div>
-                   </div>
-                 </DialogContent>
-               </Dialog>
+                   </DialogContent>
+                 </Dialog>
+                 <Button 
+                   variant="ghost" 
+                   size="sm" 
+                   className="ml-2 text-gray-500 hover:text-gray-700"
+                   onClick={() => {
+                     sessionStorage.removeItem('hasSeenQuickStart');
+                     setShowQuickStart(true);
+                   }}
+                   title="Reset Quick Start Guide"
+                 >
+                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                   </svg>
+                 </Button>
+               </div>
               
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -659,24 +652,48 @@ export default function DashboardPage() {
         <div className="flex-1 flex flex-col bg-white">
           <div className="flex-1 overflow-y-auto p-6">
             <div className="max-w-4xl mx-auto">
+              {/* Welcome Message */}
+              {showWelcome && (
+                <div className="mb-6 text-left">
+                  <div className="inline-block max-w-3xl rounded-lg px-4 py-3 bg-gray-100 text-gray-900">
+                    <div className="text-sm prose prose-sm max-w-none">
+                      <ReactMarkdown>
+                        {`Welcome to **Weak-Tie Activator**, ${user ? getUserDisplayName(user) : 'there'}! 🚀
+
+I'm here to help you discover and activate your most valuable connections. Here's how to get started:
+
+1. **Upload your LinkedIn data** - Export and upload your connections CSV
+2. **Automatic enrichment** - I'll enhance profiles with detailed information  
+3. **Set your goals** - Tell me what you're looking for and get personalized recommendations
+
+Ready to unlock the power of your network? Let's start!`}
+                      </ReactMarkdown>
+                    </div>
+                  </div>
+                </div>
+              )}
+              
               {messages.map((message, index) => (
-                <div key={index} className={`mb-6 ${message.type === 'user' ? 'text-right' : 'text-left'}`}>
+                <div key={message.id || index} className={`mb-6 ${message.role === 'user' ? 'text-right' : 'text-left'}`}>
                   <div className={`inline-block max-w-3xl rounded-lg px-4 py-3 ${
-                    message.type === 'user' 
+                    message.role === 'user' 
                       ? 'bg-blue-600 text-white' 
                       : 'bg-gray-100 text-gray-900'
                   }`}>
-                    <p className="text-sm">{message.content}</p>
-                    <p className={`text-xs mt-1 ${
-                      message.type === 'user' ? 'text-blue-100' : 'text-gray-500'
-                    }`}>
-                      {message.timestamp.toLocaleTimeString()}
-                    </p>
+                    <div className="text-sm prose prose-sm max-w-none dark:prose-invert">
+                                             {message.parts?.map((part, partIndex) => 
+                         part.type === 'text' ? (
+                           <ReactMarkdown key={partIndex}>
+                             {part.text}
+                           </ReactMarkdown>
+                         ) : null
+                       )}
+                    </div>
                   </div>
                 </div>
               ))}
               
-              {isTyping && (
+                             {false && (
                 <div className="mb-6 text-left">
                   <div className="inline-block bg-gray-100 rounded-lg px-4 py-3">
                     <div className="flex items-center space-x-2">
@@ -699,20 +716,30 @@ export default function DashboardPage() {
           {/* Chat Input */}
           <div className="border-t border-gray-200 p-6">
             <div className="max-w-4xl mx-auto">
-              <form onSubmit={handleSendMessage} className="flex space-x-4">
-                <input
-                  type="text"
-                  value={inputMessage}
-                  onChange={(e) => setInputMessage(e.target.value)}
-                  placeholder="Start typing..."
-                  className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  disabled={isTyping}
-                />
-                <Button 
-                  type="submit" 
-                  disabled={!inputMessage.trim() || isTyping}
-                  className="px-6"
-                >
+                             <form onSubmit={(e) => {
+                 e.preventDefault();
+                 console.log('Form submitted, input:', input);
+                 if (input.trim()) {
+                   console.log('Sending message...');
+                   setShowWelcome(false);
+                   sendMessage({ text: input });
+                   setInput('');
+                 } else {
+                   console.log('Input is empty, not sending');
+                 }
+               }} className="flex space-x-4">
+                                  <input
+                    type="text"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    placeholder="Start typing..."
+                    className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                  <Button 
+                    type="submit" 
+                    disabled={!input?.trim()}
+                    className="px-6"
+                  >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
                   </svg>
@@ -734,11 +761,12 @@ export default function DashboardPage() {
                   variant="outline" 
                   size="sm" 
                   className="w-full justify-start"
-                  onClick={() => setMessages(prev => [...prev, {
-                    type: 'user',
-                    content: 'How do I upload my LinkedIn connections?',
-                    timestamp: new Date()
-                  }])}
+                  onClick={() => {
+                    setShowWelcome(false);
+                    sendMessage({
+                      text: 'How do I upload my LinkedIn connections?'
+                    });
+                  }}
                 >
                   <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -750,11 +778,12 @@ export default function DashboardPage() {
                      variant="outline" 
                      size="sm" 
                      className="w-full justify-start"
-                     onClick={() => setMessages(prev => [...prev, {
-                       type: 'user',
-                       content: 'What should I include in my mission?',
-                       timestamp: new Date()
-                     }])}
+                     onClick={() => {
+                       setShowWelcome(false);
+                       sendMessage({
+                         text: 'What should I include in my mission?'
+                       });
+                     }}
                    >
                      <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
