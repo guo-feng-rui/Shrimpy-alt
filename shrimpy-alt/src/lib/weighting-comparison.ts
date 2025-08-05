@@ -1,5 +1,5 @@
 // Comparison between Keyword-based and Smart Weighting Systems
-import { calculateDynamicWeights, DynamicWeights } from './vector-schema';
+import { DynamicWeights } from './vector-schema';
 import { SmartWeighting } from './smart-weighting';
 
 export interface WeightingComparison {
@@ -18,8 +18,16 @@ export class WeightingComparison {
     userGoal?: any
   ): Promise<WeightingComparison> {
     
-    // Get keyword-based weights (old system)
-    const keywordWeights = calculateDynamicWeights(query, userGoal);
+    // Get base weights for comparison (old system simulation)
+    const keywordWeights: DynamicWeights = {
+      skills: 0.20,
+      experience: 0.20,
+      company: 0.20,
+      location: 0.15,
+      network: 0.15,
+      goal: 0.05,
+      education: 0.05
+    };
     
     // Get smart weights (new system)
     const smartWeights = await SmartWeighting.calculateSmartWeights(query, userGoal);

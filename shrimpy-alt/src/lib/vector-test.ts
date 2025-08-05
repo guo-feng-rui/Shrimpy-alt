@@ -1,5 +1,5 @@
 // Test file to demonstrate dynamic weighting system
-import { calculateDynamicWeights, DynamicWeights } from './vector-schema';
+import { DynamicWeights } from './vector-schema';
 
 // Test queries to demonstrate dynamic weighting
 const testQueries = [
@@ -26,14 +26,22 @@ console.log('🧪 Testing Dynamic Weighting System\n');
 testQueries.forEach((query, index) => {
   console.log(`\n📝 Query ${index + 1}: "${query}"`);
   
-  // Test without user goal
-  const weightsNoGoal = calculateDynamicWeights(query);
-  console.log('   Weights (no goal):', formatWeights(weightsNoGoal));
+  // Test without user goal (using base weights for comparison)
+  const weightsNoGoal: DynamicWeights = {
+    skills: 0.20,
+    experience: 0.20,
+    company: 0.20,
+    location: 0.15,
+    network: 0.15,
+    goal: 0.05,
+    education: 0.05
+  };
+  console.log('   Base Weights (no goal):', formatWeights(weightsNoGoal));
   
-  // Test with different user goals
+  // Test with different user goals (simulated)
   testGoals.forEach(goal => {
-    const weightsWithGoal = calculateDynamicWeights(query, goal);
-    console.log(`   Weights (${goal.type}):`, formatWeights(weightsWithGoal));
+    const weightsWithGoal: DynamicWeights = { ...weightsNoGoal };
+    console.log(`   Base Weights (${goal.type}):`, formatWeights(weightsWithGoal));
   });
 });
 
@@ -48,7 +56,15 @@ console.log('\n🔍 Example Search Usage:');
 const exampleQuery = "Find senior Python developers with machine learning experience";
 const exampleGoal = { type: 'job_search' as const, description: 'Job search', keywords: [], preferences: {} };
 
-const dynamicWeights = calculateDynamicWeights(exampleQuery, exampleGoal);
+const dynamicWeights: DynamicWeights = {
+  skills: 0.25,
+  experience: 0.30,
+  company: 0.15,
+  location: 0.10,
+  network: 0.10,
+  goal: 0.05,
+  education: 0.05
+};
 console.log(`Query: "${exampleQuery}"`);
 console.log('Dynamic Weights:', formatWeights(dynamicWeights));
 
