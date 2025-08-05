@@ -1,5 +1,6 @@
 export interface Connection {
   name: string;
+  url?: string;
   company?: string;
   position?: string;
   email?: string;
@@ -21,26 +22,55 @@ export function parseLinkedInCSV(csvContent: string): ParseResult {
     throw new Error('CSV file must have at least a header row and one data row');
   }
 
-  const headers = parseHeaders(lines[0]);
+  console.log('Raw CSV content (first 500 chars):', csvContent.substring(0, 500));
+  console.log('Number of lines:', lines.length);
+  console.log('First line (headers):', lines[0]);
+  console.log('Second line (sample data):', lines[1]);
+
+  // Find the actual header row - LinkedIn exports often have metadata in the first few rows
+  let headerRowIndex = 0;
+  for (let i = 0; i < Math.min(5, lines.length); i++) {
+    const line = lines[i];
+    if (line.includes('First Name') && line.includes('Last Name') && line.includes('URL')) {
+      headerRowIndex = i;
+      break;
+    }
+  }
+
+  console.log('Found headers at row:', headerRowIndex + 1);
+  const headers = parseHeaders(lines[headerRowIndex]);
+  console.log('Parsed headers:', headers);
+  
   const connections: Connection[] = [];
   const errors: string[] = [];
   let validCount = 0;
 
-  for (let i = 1; i < lines.length; i++) {
+  // Start processing from the row after the header row
+  for (let i = headerRowIndex + 1; i < lines.length; i++) {
     try {
       const connection = parseConnectionLine(lines[i], headers, i + 1);
-      if (connection.name) {
+      console.log(`Row ${i + 1} parsed:`, connection);
+      
+      // Accept connections that have either a name or a URL
+      if (connection.name || connection.url) {
         connections.push(connection);
         validCount++;
+      } else {
+        errors.push(`Row ${i + 1}: No name or URL found`);
+        console.log(`Row ${i + 1} rejected - no name or URL`);
       }
     } catch (error) {
       errors.push(`Row ${i + 1}: ${error instanceof Error ? error.message : 'Invalid data'}`);
+      console.log(`Row ${i + 1} error:`, error);
     }
   }
 
+  console.log(`Final result: ${connections.length} connections, ${errors.length} errors`);
+  console.log('Sample connections:', connections.slice(0, 3));
+
   return {
     connections,
-    totalCount: lines.length - 1,
+    totalCount: lines.length - headerRowIndex - 1,
     validCount,
     errors
   };
@@ -57,34 +87,46 @@ function parseHeaders(headerLine: string): string[] {
 
 function parseConnectionLine(line: string, headers: string[], rowNumber: number): Connection {
   const values = parseCSVLine(line);
+  console.log(`Row ${rowNumber} values:`, values);
+  console.log(`Row ${rowNumber} headers:`, headers);
   
-  if (values.length !== headers.length) {
-    throw new Error(`Column count mismatch. Expected ${headers.length}, got ${values.length}`);
-  }
-
+  // Be more flexible with column count - LinkedIn exports can have varying columns
   const connection: Connection = {};
   
   headers.forEach((header, index) => {
     const value = values[index]?.trim() || '';
+    console.log(`Row ${rowNumber}, Header "${header}": "${value}"`);
     
     // Map common LinkedIn field names to our standard format
     switch (header) {
       case 'first name':
       case 'firstname':
-        connection.name = connection.name ? `${value} ${connection.name}` : value;
+        if (!connection.name) {
+          connection.name = value;
+        } else {
+          connection.name = `${value} ${connection.name}`;
+        }
         break;
       case 'last name':
       case 'lastname':
-        connection.name = connection.name ? `${connection.name} ${value}` : value;
+        if (!connection.name) {
+          connection.name = value;
+        } else {
+          connection.name = `${connection.name} ${value}`;
+        }
         break;
       case 'name':
       case 'full name':
       case 'fullname':
+      case 'display name':
+      case 'connection name':
         connection.name = value;
         break;
       case 'company':
       case 'organization':
       case 'current company':
+      case 'employer':
+      case 'workplace':
         connection.company = value;
         break;
       case 'position':
@@ -92,6 +134,12 @@ function parseConnectionLine(line: string, headers: string[], rowNumber: number)
       case 'job title':
       case 'current position':
         connection.position = value;
+        break;
+      case 'url':
+      case 'linkedin url':
+      case 'profile url':
+      case 'profile':
+        connection.url = value;
         break;
       case 'email':
       case 'email address':
@@ -160,7 +208,9 @@ export function validateConnections(connections: Connection[]): { valid: Connect
   const invalid: Connection[] = [];
 
   connections.forEach(connection => {
-    if (connection.name && connection.name.trim().length > 0) {
+    // Accept connections that have either a name or a URL (LinkedIn profile URL)
+    if ((connection.name && connection.name.trim().length > 0) || 
+        (connection.url && connection.url.trim().length > 0)) {
       valid.push(connection);
     } else {
       invalid.push(connection);
@@ -175,8 +225,10 @@ export function getCSVPreview(connections: Connection[], maxRows: number = 5): C
 }
 
 export function generateSampleCSV(): string {
-  return `First Name,Last Name,Company,Position,Email,Location
-John,Doe,Acme Corp,Software Engineer,john.doe@acme.com,San Francisco
-Jane,Smith,Tech Startup,Product Manager,jane.smith@startup.com,New York
-Mike,Johnson,Big Corp,Senior Developer,mike.johnson@bigcorp.com,Austin`;
+  return `First Name,Last Name,URL,Email Address,Company,Position,Connected On
+John,Smith,https://www.linkedin.com/in/john-smith,john.smith@email.com,Tech Corp,Software Engineer,15 Jan 2024
+Sarah,Johnson,https://www.linkedin.com/in/sarah-johnson,sarah.j@email.com,Design Studio,UX Designer,20 Feb 2024
+Mike,Wilson,https://www.linkedin.com/in/mike-wilson,mike.wilson@email.com,Startup Inc,Product Manager,10 Mar 2024
+Lisa,Brown,https://www.linkedin.com/in/lisa-brown,lisa.brown@email.com,Marketing Agency,Marketing Director,05 Apr 2024
+David,Lee,https://www.linkedin.com/in/david-lee,david.lee@email.com,Consulting Group,Senior Consultant,12 May 2024`;
 } 
