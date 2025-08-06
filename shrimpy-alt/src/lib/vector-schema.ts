@@ -1,5 +1,7 @@
 // Vector Storage Schema for Multi-Vector RAG with Dynamic Weighting
 
+import { DynamicWeights } from './smart-weighting';
+
 export interface VectorEmbedding {
   vector: number[];  // The actual embedding vector
   dimension: number;  // Vector dimension (e.g., 3072 for text-embedding-3-large)
@@ -38,6 +40,7 @@ export interface ConnectionVectors {
 export interface SearchQuery {
   query: string;
   userId: string;
+  weights?: DynamicWeights; // Pre-calculated weights to avoid duplicate AI calls
   goal: UserGoal;
   filters?: SearchFilters;
   limit?: number;
@@ -95,15 +98,7 @@ export const BASE_WEIGHTS = {
 } as const;
 
 // Dynamic weight calculation based on real-time user input
-export interface DynamicWeights {
-  skills: number;
-  experience: number;
-  company: number;
-  location: number;
-  network: number;
-  goal: number;
-  education: number;
-}
+// DynamicWeights interface is now defined in smart-weighting.ts to avoid circular imports
 
 
 

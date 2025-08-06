@@ -1,5 +1,16 @@
 // Smart Weighting System using Semantic Analysis and AI
-import { DynamicWeights, UserGoal } from './vector-schema';
+import { UserGoal } from './vector-schema';
+
+// Dynamic weight configuration for search criteria
+export interface DynamicWeights {
+  skills: number;         // Weight for technical skills and abilities
+  experience: number;     // Weight for work experience and seniority
+  company: number;        // Weight for company/organization relevance
+  location: number;       // Weight for geographic location
+  network: number;        // Weight for mutual connections and network overlap
+  goal: number;          // Weight for user's stated goals and objectives
+  education: number;      // Weight for educational background
+}
 
 // LLM-based semantic analysis categories (for reference only)
 export interface SemanticCategory {
@@ -247,16 +258,62 @@ export class SmartWeighting {
     return this.normalizeWeights(adjustedWeights);
   }
   
+  // Lightweight keyword-based weighting for small datasets (no LLM calls)
+  static calculateKeywordBasedWeights(
+    query: string, 
+    userGoal?: UserGoal
+  ): DynamicWeights {
+    const queryLower = query.toLowerCase();
+    
+    // Base weights
+    const baseWeights: DynamicWeights = {
+      skills: 0.25,
+      experience: 0.20,
+      company: 0.15,
+      location: 0.15,
+      network: 0.10,
+      goal: 0.10,
+      education: 0.05
+    };
+    
+    // Boost weights based on keywords
+    if (queryLower.includes('engineer') || queryLower.includes('developer') || queryLower.includes('ml') || queryLower.includes('ai') || queryLower.includes('python') || queryLower.includes('react')) {
+      baseWeights.skills = 0.4;
+      baseWeights.experience = 0.25;
+    }
+    
+    if (queryLower.includes('austin') || queryLower.includes('texas') || queryLower.includes('location') || queryLower.includes('remote')) {
+      baseWeights.location = 0.3;
+      baseWeights.skills = Math.max(0.2, baseWeights.skills - 0.1);
+    }
+    
+    if (queryLower.includes('senior') || queryLower.includes('lead') || queryLower.includes('experience') || queryLower.includes('years')) {
+      baseWeights.experience = 0.35;
+      baseWeights.skills = Math.max(0.2, baseWeights.skills - 0.1);
+    }
+    
+    if (queryLower.includes('company') || queryLower.includes('startup') || queryLower.includes('enterprise')) {
+      baseWeights.company = 0.25;
+    }
+    
+    // Normalize to ensure weights sum to 1
+    return this.normalizeWeights(baseWeights);
+  }
+
   // Main smart weighting function
   static async calculateSmartWeights(
     query: string, 
     userGoal?: UserGoal
   ): Promise<DynamicWeights> {
     // Step 1: AI-powered intent analysis
+    console.time('🔍 AI intent analysis');
     const intentAnalysis = await this.analyzeSemanticIntent(query);
+    console.timeEnd('🔍 AI intent analysis');
     
     // Step 2: LLM-powered pattern recognition
+    console.time('🔍 Pattern recognition');
     const patternWeights = await this.detectPatterns(query);
+    console.timeEnd('🔍 Pattern recognition');
     
     // Step 3: Contextual analysis
     const context = this.analyzeContext(query);

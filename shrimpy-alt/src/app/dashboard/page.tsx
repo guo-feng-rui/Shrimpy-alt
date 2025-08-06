@@ -10,7 +10,8 @@ import { useRouter } from 'next/navigation';
 import { getUserDisplayName } from '@/lib/utils';
 import { parseLinkedInCSV, validateConnections, getCSVPreview, generateSampleCSV, type Connection, type ParseResult } from '@/lib/csv-parser';
 import { enrichConnectionData, testProfileParsing } from '@/lib/profile-parser';
-// Removed useChat to avoid conflicts with manual message management
+import { useChat } from '@ai-sdk/react';
+import { DefaultChatTransport } from 'ai';
 import ReactMarkdown from 'react-markdown';
 
 import { storeConnections, getUserConnections, getConnectionStats, type StoredConnection } from '@/lib/firestore';
@@ -45,13 +46,12 @@ export default function DashboardPage() {
   const [input, setInput] = useState('');
   const router = useRouter();
 
-  // Manual message management (no useChat hook to avoid conflicts)
-  const [messages, setMessages] = useState<Array<{
-    id: string;
-    role: 'user' | 'assistant';
-    content: string;
-    timestamp: Date;
-  }>>([]);
+  // Use the official useChat hook for proper streaming
+  const { messages, sendMessage, setMessages } = useChat({
+    transport: new DefaultChatTransport({
+      api: '/api/chat',
+    }),
+  });
   
   // Ref for auto-scrolling to bottom
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -61,99 +61,14 @@ export default function DashboardPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Helper function to add assistant message without adding user message
+  // Helper function to add assistant message (for search results)
   const addAssistantMessage = (text: string) => {
     const assistantMessage = {
       id: Date.now().toString(),
       role: 'assistant' as const,
-      content: text,
-      timestamp: new Date()
+      parts: [{ type: 'text' as const, text: text }],
     };
-    console.log('🟡 Final assistant message:', assistantMessage);
-    setMessages(prev => [...prev, assistantMessage]);
-  };
-
-  // Helper function to get AI response with real-time streaming
-  const getAIResponse = async (text: string, currentMessages: Array<{id: string; role: 'user' | 'assistant'; content: string; timestamp: Date}>) => {
-    try {
-      // Create a temporary assistant message that will be updated in real-time
-      const tempAssistantMessage = {
-        id: Date.now().toString(),
-        role: 'assistant' as const,
-        content: '',
-        timestamp: new Date()
-      };
-      
-      // Add the empty assistant message first
-      setMessages(prev => [...prev, tempAssistantMessage]);
-      
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: currentMessages.map(msg => ({
-            id: msg.id,
-            role: msg.role,
-            parts: [{ type: 'text', text: msg.content }]
-          }))
-        })
-      });
-      
-      if (response.ok && response.body) {
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let aiResponse = '';
-        
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            
-            const chunk = decoder.decode(value, { stream: true });
-            console.log('🔥 Raw chunk received:', JSON.stringify(chunk));
-            
-            // For toTextStreamResponse(), the response is plain text chunks
-            if (chunk) {
-              aiResponse += chunk;
-              console.log('🟢 Added text chunk:', chunk, 'Total so far:', aiResponse);
-              
-              // Update the assistant message in real-time
-              setMessages(prev => prev.map(msg => 
-                msg.id === tempAssistantMessage.id 
-                  ? { ...msg, content: aiResponse }
-                  : msg
-              ));
-            }
-          }
-          
-          if (!aiResponse.trim()) {
-            // Update with error message if no content received
-            setMessages(prev => prev.map(msg => 
-              msg.id === tempAssistantMessage.id 
-                ? { ...msg, content: 'I received your message but had trouble generating a response. Please try again.' }
-                : msg
-            ));
-          }
-        } catch (streamError) {
-          console.error('Stream reading error:', streamError);
-          setMessages(prev => prev.map(msg => 
-            msg.id === tempAssistantMessage.id 
-              ? { ...msg, content: 'Sorry, I encountered an error while processing your message.' }
-              : msg
-          ));
-        }
-      } else {
-        console.error('Invalid response:', response.status, response.statusText);
-        setMessages(prev => prev.map(msg => 
-          msg.id === tempAssistantMessage.id 
-            ? { ...msg, content: 'Sorry, I encountered an error. Please try again.' }
-            : msg
-        ));
-      }
-    } catch (error) {
-      console.error('Error getting AI response:', error);
-      addAssistantMessage('Sorry, I encountered an error. Please try again.');
-    }
+    setMessages(prev => [...prev, assistantMessage as any]);
   };
 
   // Helper function to format search results
@@ -169,6 +84,7 @@ export default function DashboardPage() {
   const classifyGoalAndSearch = async (messageContent: string, userId: string) => {
     try {
       console.log('🔍 Performing search for:', messageContent);
+      console.time('🔍 Total search time');
       
       // Perform semantic search
       const searchResponse = await fetch('/api/search-connections', {
@@ -212,17 +128,21 @@ export default function DashboardPage() {
           }
           
           addAssistantMessage(responseText);
+          console.timeEnd('🔍 Total search time');
           console.log('🔍 Search results sent to chat successfully');
         } else {
           console.log('🔍 No search results found, sending no results message');
           addAssistantMessage(`🔍 **No matches found** for your query. This could be because:\n\n• Your search terms are too specific\n• You haven't uploaded your LinkedIn connections yet\n• The connections don't match your criteria\n\n**Try:**\n• Broader search terms (e.g., "developers" instead of "React developers")  \n• Upload your LinkedIn connections first\n• Check if your connections have the skills/locations you're looking for`);
+          console.timeEnd('🔍 Total search time');
         }
       } else {
         console.error('Search API failed:', searchResponse.status);
+        console.timeEnd('🔍 Total search time');
         addAssistantMessage(`❌ **Search failed.** Please try again or contact support if the issue persists.`);
       }
     } catch (error) {
       console.error('Search failed:', error);
+      console.timeEnd('🔍 Total search time');
       addAssistantMessage(`❌ **Search failed.** Please try again or contact support if the issue persists.`);
     }
   };
@@ -840,7 +760,7 @@ Ready to unlock the power of your network? Let's start!`}
                   }`}>
                       <div className="text-sm prose prose-sm max-w-none dark:prose-invert">
                         <ReactMarkdown>
-                          {message.content}
+                          {message.parts?.map(part => part.type === 'text' ? part.text : '').join('') || ''}
                         </ReactMarkdown>
                   </div>
                 </div>
@@ -881,15 +801,8 @@ Ready to unlock the power of your network? Let's start!`}
                    console.log('Sending message...');
                                         setShowWelcome(false);
                      
-                                         // ALWAYS display the user's message first
-                    const userMessage = { 
-                      id: Date.now().toString(),
-                      role: 'user' as const, 
-                      content: input, 
-                      timestamp: new Date() 
-                    };
-                    const updatedMessages = [...messages, userMessage];
-                    setMessages(updatedMessages);
+                                         const inputText = input;
+                    setInput('');
                      
                      // Use AI to classify the intent via API
                      try {
@@ -900,7 +813,7 @@ Ready to unlock the power of your network? Let's start!`}
                        const intentResponse = await fetch('/api/classify-intent', {
                          method: 'POST',
                          headers: { 'Content-Type': 'application/json' },
-                         body: JSON.stringify({ message: input }),
+                         body: JSON.stringify({ message: inputText }),
                          signal: controller.signal
                        });
                        
@@ -914,22 +827,40 @@ Ready to unlock the power of your network? Let's start!`}
                          
                          if (intent.isSearchQuery) {
                            console.log('🔍 AI detected search query - performing search ONLY');
-                           // For search queries, perform search and display results
+                           // For search queries, manually add user message and then search results
+                           const userMessage = {
+                             id: Date.now().toString(),
+                             role: 'user' as const,
+                             parts: [{ type: 'text' as const, text: inputText }],
+                           };
+                           setMessages(prev => [...prev, userMessage as any]);
+                           
+                           // Then perform search and add results as assistant message
                            try {
-                             await classifyGoalAndSearch(input, 'test-user');
+                             // Use requestAnimationFrame for minimal delay to ensure UI updates
+                             requestAnimationFrame(async () => {
+                               try {
+                                 await classifyGoalAndSearch(inputText, 'test-user');
+                               } catch (searchError) {
+                                 console.error('❌ Search failed:', searchError);
+                                 addAssistantMessage('Sorry, I encountered an error while searching. Please try again.');
+                               }
+                             });
                            } catch (error) {
-                             console.error('❌ Search failed:', error);
-                             // Fallback to chat if search fails
-                             await getAIResponse(input, updatedMessages);
+                             console.error('❌ Search setup failed:', error);
                            }
                          } else {
                            console.log('💬 AI detected chat query - sending to AI');
-                           // For chat queries, send to AI and display response
-                           await getAIResponse(input, updatedMessages);
+                           // For chat queries, use sendMessage for proper streaming
+                           sendMessage({
+                             parts: [{ type: 'text', text: inputText }],
+                           });
                          }
                        } else {
                          console.log('❌ Intent classification failed, defaulting to chat');
-                         await getAIResponse(input, updatedMessages);
+                         sendMessage({
+                           parts: [{ type: 'text', text: inputText }],
+                         });
                        }
                      } catch (error) {
                        console.error('❌ Error in intent classification:', error);
@@ -938,11 +869,10 @@ Ready to unlock the power of your network? Let's start!`}
                        } else {
                          console.log('💬 Fallback: sending to chat due to intent classification error');
                        }
-                       await getAIResponse(input, updatedMessages);
+                       sendMessage({
+                         parts: [{ type: 'text', text: inputText }],
+                       });
                      }
-                   
-                   // Ensure input is cleared even if there are errors
-                   setInput('');
                  } else {
                    console.log('Input is empty, not sending');
                  }
@@ -980,17 +910,11 @@ Ready to unlock the power of your network? Let's start!`}
                   variant="outline" 
                   size="sm" 
                   className="w-full justify-start"
-                  onClick={async () => {
+                  onClick={() => {
                     setShowWelcome(false);
-                    const userMessage = {
-                      id: Date.now().toString(),
-                      role: 'user' as const,
-                      content: 'How do I upload my LinkedIn connections?',
-                      timestamp: new Date()
-                    };
-                    const updatedMessages = [...messages, userMessage];
-                    setMessages(updatedMessages);
-                    await getAIResponse('How do I upload my LinkedIn connections?', updatedMessages);
+                    sendMessage({
+                      parts: [{ type: 'text', text: 'How do I upload my LinkedIn connections?' }],
+                    });
                   }}
                 >
                   <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1003,17 +927,11 @@ Ready to unlock the power of your network? Let's start!`}
                      variant="outline" 
                      size="sm" 
                      className="w-full justify-start"
-                     onClick={async () => {
+                     onClick={() => {
                        setShowWelcome(false);
-                       const userMessage = {
-                         id: Date.now().toString(),
-                         role: 'user' as const,
-                         content: 'What should I include in my mission?',
-                         timestamp: new Date()
-                       };
-                       const updatedMessages = [...messages, userMessage];
-                       setMessages(updatedMessages);
-                       await getAIResponse('What should I include in my mission?', updatedMessages);
+                       sendMessage({
+                         parts: [{ type: 'text', text: 'What should I include in my mission?' }],
+                       });
                      }}
                    >
                      <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">

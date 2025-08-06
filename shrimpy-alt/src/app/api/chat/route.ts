@@ -111,11 +111,8 @@ Be conversational, helpful, and focused on professional networking strategy. Kee
 
        console.log('Chat API: StreamText completed successfully');
        
-       // Debug: Check what methods are available
-       console.log('Chat API: Available methods on result:', Object.getOwnPropertyNames(result));
-       
        // Return the streaming response for UI messages (real-time streaming)
-       return result.toTextStreamResponse();
+       return result.toUIMessageStreamResponse();
     } catch (azureError: unknown) {
       console.error('Chat API: Azure OpenAI error:', azureError);
       

@@ -5,10 +5,9 @@ import {
   WeightedSearchResult, 
   UserGoal,
   COLLECTIONS,
-  vectorUtils,
-  DynamicWeights
+  vectorUtils
 } from './vector-schema';
-import { SmartWeighting } from './smart-weighting';
+import { SmartWeighting, DynamicWeights } from './smart-weighting';
 import { cosineSimilarity } from 'ai';
 import { 
   collection, 
@@ -99,6 +98,23 @@ export class VectorStorage {
     }
   }
 
+  // Get connection count for a user (for performance optimization)
+  static async getConnectionCount(userId: string): Promise<number> {
+    try {
+      const q = query(
+        collection(db, COLLECTIONS.CONNECTION_VECTORS),
+        where('userId', '==', userId),
+        where('isActive', '==', true)
+      );
+      
+      const querySnapshot = await getDocs(q);
+      return querySnapshot.size;
+    } catch (error) {
+      console.error('Error getting connection count:', error);
+      return 0; // Return 0 on error to fall back to simple weights
+    }
+  }
+
   // Delete connection vectors
   static async deleteConnectionVectors(connectionId: string): Promise<void> {
     try {
@@ -160,8 +176,8 @@ export class VectorStorage {
         filteredVectors = this.applyFilters(userVectors, filters);
       }
 
-      // Calculate smart weights using AI-powered analysis
-      const dynamicWeights = await SmartWeighting.calculateSmartWeights(query, goal);
+      // Use pre-calculated weights if provided, otherwise calculate smart weights
+      const dynamicWeights = searchQuery.weights || await SmartWeighting.calculateSmartWeights(query, goal);
 
       // Calculate weighted similarities
       const results: WeightedSearchResult[] = [];

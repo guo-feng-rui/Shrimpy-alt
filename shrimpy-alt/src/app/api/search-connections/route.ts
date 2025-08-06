@@ -12,7 +12,7 @@ export async function POST(req: NextRequest) {
       const authResult = requireAuth(req);
       authUserId = authResult.userId;
     } catch (authError) {
-      console.log('🔍 Search API: Auth failed, using test user:', authError.message);
+      console.log('🔍 Search API: Auth failed, using test user:', authError instanceof Error ? authError.message : String(authError));
     }
     
     const { query, userId, goal, limit = 10 } = await req.json();
@@ -30,21 +30,39 @@ export async function POST(req: NextRequest) {
     console.log('🔍 Search API: User ID:', finalUserId);
     console.log('🔍 Search API: Goal:', goal);
 
-    // Step 1: Calculate smart weights using our LLM-based system
-    const smartWeights = await SmartWeighting.calculateSmartWeights(query, goal);
+    // Step 1: Calculate smart weights (optimize for small datasets)
+    console.time('🔍 SmartWeighting calculation');
+    
+    // For small datasets, use simple keyword-based weights to avoid expensive LLM calls
+    const connectionCount = await VectorStorage.getConnectionCount(finalUserId);
+    let smartWeights;
+    
+    if (connectionCount <= 10) {
+      console.log('🔍 Using lightweight keyword-based weights for small dataset (', connectionCount, 'connections)');
+      smartWeights = SmartWeighting.calculateKeywordBasedWeights(query, goal);
+    } else {
+      console.log('🔍 Using AI-powered smart weights for larger dataset (', connectionCount, 'connections)');
+      smartWeights = await SmartWeighting.calculateSmartWeights(query, goal);
+    }
+    
+    console.timeEnd('🔍 SmartWeighting calculation');
     console.log('🔍 Search API: Smart weights calculated:', smartWeights);
 
-    // Step 2: Perform weighted vector search
+    // Step 2: Perform weighted vector search (with pre-calculated weights)
+    console.time('🔍 Vector search');
     const searchQuery: SearchQuery = {
       query,
       userId: finalUserId,
+      weights: smartWeights, // Pass pre-calculated weights to avoid duplicate AI calls
       goal,
       limit: limit
     };
     const searchResults = await VectorStorage.searchConnections(searchQuery);
+    console.timeEnd('🔍 Vector search');
     console.log('🔍 Search API: Found', searchResults.length, 'results');
 
     // Step 3: Apply smart weighting to results with normalized scoring
+    console.time('🔍 Results processing');
     const weightedResults = searchResults.map((result: WeightedSearchResult) => {
       // Normalize individual scores to 0-1 range (assuming they might be small decimals)
       const normalizeScore = (score: number) => Math.min(1, Math.max(0, score * 10)); // Scale up small scores
@@ -91,6 +109,7 @@ export async function POST(req: NextRequest) {
       .sort((a, b) => b.weightedScore - a.weightedScore)
       .slice(0, limit);
 
+    console.timeEnd('🔍 Results processing');
     console.log('🔍 Search API: Returning', sortedResults.length, 'weighted results');
 
     return NextResponse.json({
