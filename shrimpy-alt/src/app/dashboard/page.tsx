@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { auth } from '../../../firebase.config';
 import { signOut, User } from 'firebase/auth';
 import { Button } from '@/components/ui/button';
@@ -52,6 +52,14 @@ export default function DashboardPage() {
     content: string;
     timestamp: Date;
   }>>([]);
+  
+  // Ref for auto-scrolling to bottom
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  
+  // Auto-scroll to bottom when messages change
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
 
   // Helper function to add assistant message without adding user message
   const addAssistantMessage = (text: string) => {
@@ -61,51 +69,86 @@ export default function DashboardPage() {
       content: text,
       timestamp: new Date()
     };
+    console.log('🟡 Final assistant message:', assistantMessage);
     setMessages(prev => [...prev, assistantMessage]);
   };
 
-  // Helper function to get AI response without adding user message (since we already added it)
+  // Helper function to get AI response with real-time streaming
   const getAIResponse = async (text: string, currentMessages: Array<{id: string; role: 'user' | 'assistant'; content: string; timestamp: Date}>) => {
     try {
+      // Create a temporary assistant message that will be updated in real-time
+      const tempAssistantMessage = {
+        id: Date.now().toString(),
+        role: 'assistant' as const,
+        content: '',
+        timestamp: new Date()
+      };
+      
+      // Add the empty assistant message first
+      setMessages(prev => [...prev, tempAssistantMessage]);
+      
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: currentMessages
+          messages: currentMessages.map(msg => ({
+            id: msg.id,
+            role: msg.role,
+            parts: [{ type: 'text', text: msg.content }]
+          }))
         })
       });
       
-      if (response.ok) {
-        const reader = response.body?.getReader();
+      if (response.ok && response.body) {
+        const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let aiResponse = '';
         
-        if (reader) {
+        try {
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
             
-            const chunk = decoder.decode(value);
-            const lines = chunk.split('\n');
+            const chunk = decoder.decode(value, { stream: true });
+            console.log('🔥 Raw chunk received:', JSON.stringify(chunk));
             
-            for (const line of lines) {
-              if (line.startsWith('data: ')) {
-                try {
-                  const data = JSON.parse(line.slice(6));
-                  if (data.content) {
-                    aiResponse += data.content;
-                  }
-                } catch (e) {
-                  // Ignore parsing errors
-                }
-              }
+            // For toTextStreamResponse(), the response is plain text chunks
+            if (chunk) {
+              aiResponse += chunk;
+              console.log('🟢 Added text chunk:', chunk, 'Total so far:', aiResponse);
+              
+              // Update the assistant message in real-time
+              setMessages(prev => prev.map(msg => 
+                msg.id === tempAssistantMessage.id 
+                  ? { ...msg, content: aiResponse }
+                  : msg
+              ));
             }
           }
+          
+          if (!aiResponse.trim()) {
+            // Update with error message if no content received
+            setMessages(prev => prev.map(msg => 
+              msg.id === tempAssistantMessage.id 
+                ? { ...msg, content: 'I received your message but had trouble generating a response. Please try again.' }
+                : msg
+            ));
+          }
+        } catch (streamError) {
+          console.error('Stream reading error:', streamError);
+          setMessages(prev => prev.map(msg => 
+            msg.id === tempAssistantMessage.id 
+              ? { ...msg, content: 'Sorry, I encountered an error while processing your message.' }
+              : msg
+          ));
         }
-        
-        if (aiResponse) {
-          addAssistantMessage(aiResponse);
-        }
+      } else {
+        console.error('Invalid response:', response.status, response.statusText);
+        setMessages(prev => prev.map(msg => 
+          msg.id === tempAssistantMessage.id 
+            ? { ...msg, content: 'Sorry, I encountered an error. Please try again.' }
+            : msg
+        ));
       }
     } catch (error) {
       console.error('Error getting AI response:', error);
@@ -230,7 +273,7 @@ export default function DashboardPage() {
         // Only show Quick Start Guide once per session
         const hasSeenQuickStart = sessionStorage.getItem('hasSeenQuickStart');
         if (!hasSeenQuickStart) {
-          setShowQuickStart(true);
+        setShowQuickStart(true);
           sessionStorage.setItem('hasSeenQuickStart', 'true');
         }
         
@@ -502,85 +545,85 @@ export default function DashboardPage() {
             
                          <div className="flex items-center space-x-4">
                <div className="flex items-center">
-                 <Dialog open={showQuickStart} onOpenChange={setShowQuickStart}>
-                   <DialogTrigger asChild>
-                     <Button variant="outline" size="sm" className="text-blue-600 border-blue-200 hover:bg-blue-50">
-                       <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                       </svg>
-                       Quick Start
-                     </Button>
-                   </DialogTrigger>
-                   <DialogContent className="max-w-2xl">
-                     <DialogHeader>
-                       <DialogTitle className="text-2xl font-bold">Quick Start Guide</DialogTitle>
-                       <DialogDescription>
-                         Follow these steps to start using Weak-Tie Activator
-                       </DialogDescription>
-                     </DialogHeader>
-                     <div className="space-y-6">
-                       <div className="space-y-4">
-                         <div className="flex items-start space-x-4">
-                           <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0">
-                             1
-                           </div>
-                           <div>
-                             <h4 className="font-semibold text-lg">Export LinkedIn Connections</h4>
-                             <p className="text-gray-600">
-                               Export your LinkedIn connections list as a CSV file
-                             </p>
-                           </div>
+               <Dialog open={showQuickStart} onOpenChange={setShowQuickStart}>
+                 <DialogTrigger asChild>
+                   <Button variant="outline" size="sm" className="text-blue-600 border-blue-200 hover:bg-blue-50">
+                     <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                     </svg>
+                     Quick Start
+                   </Button>
+                 </DialogTrigger>
+                 <DialogContent className="max-w-2xl">
+                   <DialogHeader>
+                     <DialogTitle className="text-2xl font-bold">Quick Start Guide</DialogTitle>
+                     <DialogDescription>
+                       Follow these steps to start using Weak-Tie Activator
+                     </DialogDescription>
+                   </DialogHeader>
+                   <div className="space-y-6">
+                     <div className="space-y-4">
+                       <div className="flex items-start space-x-4">
+                         <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0">
+                           1
                          </div>
-                         
-                         <div className="flex items-start space-x-4">
-                           <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0">
-                             2
-                           </div>
-                           <div>
-                                   <h4 className="font-semibold text-lg">Upload & Enrich</h4>
-                             <p className="text-gray-600">
-                                     Upload the CSV file and we&apos;ll automatically enrich profiles with detailed data
-                             </p>
-                           </div>
-                         </div>
-                         
-                         <div className="flex items-start space-x-4">
-                           <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0">
-                             3
-                           </div>
-                           <div>
-                            <h4 className="font-semibold text-lg">Chat with AI</h4>
-                             <p className="text-gray-600">
-                              Describe your goals in the chat and get personalized recommendations
-                             </p>
-                           </div>
+                         <div>
+                           <h4 className="font-semibold text-lg">Export LinkedIn Connections</h4>
+                           <p className="text-gray-600">
+                             Export your LinkedIn connections list as a CSV file
+                           </p>
                          </div>
                        </div>
                        
-                       <div className="bg-blue-50 p-4 rounded-lg">
-                         <h5 className="font-semibold text-blue-900 mb-2">💡 Pro Tips:</h5>
-                         <ul className="text-sm text-blue-800 space-y-1">
-                           <li>• Make sure your CSV file includes connection names and companies</li>
-                           <li>• Be specific about your mission goals for better recommendations</li>
-                           <li>• Review and reach out to your top recommendations within 24 hours</li>
-                         </ul>
+                       <div className="flex items-start space-x-4">
+                         <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0">
+                           2
+                         </div>
+                         <div>
+                                 <h4 className="font-semibold text-lg">Upload & Enrich</h4>
+                           <p className="text-gray-600">
+                                   Upload the CSV file and we&apos;ll automatically enrich profiles with detailed data
+                           </p>
+                         </div>
                        </div>
                        
-                       <div className="flex justify-end">
-                         <Button 
-                           variant="outline" 
+                       <div className="flex items-start space-x-4">
+                         <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0">
+                           3
+                         </div>
+                         <div>
+                          <h4 className="font-semibold text-lg">Chat with AI</h4>
+                           <p className="text-gray-600">
+                            Describe your goals in the chat and get personalized recommendations
+                           </p>
+                         </div>
+                       </div>
+                     </div>
+                     
+                     <div className="bg-blue-50 p-4 rounded-lg">
+                       <h5 className="font-semibold text-blue-900 mb-2">💡 Pro Tips:</h5>
+                       <ul className="text-sm text-blue-800 space-y-1">
+                         <li>• Make sure your CSV file includes connection names and companies</li>
+                         <li>• Be specific about your mission goals for better recommendations</li>
+                         <li>• Review and reach out to your top recommendations within 24 hours</li>
+                       </ul>
+                     </div>
+                     
+                     <div className="flex justify-end">
+                       <Button 
+                         variant="outline" 
                            onClick={() => {
                              setShowQuickStart(false);
                              // Ensure the session storage is set to prevent reopening
                              sessionStorage.setItem('hasSeenQuickStart', 'true');
                            }}
-                         >
-                           Got it!
-                         </Button>
-                       </div>
+                       >
+                         Got it!
+                       </Button>
                      </div>
-                   </DialogContent>
-                 </Dialog>
+                   </div>
+                 </DialogContent>
+               </Dialog>
                  <Button 
                    variant="ghost" 
                    size="sm" 
@@ -790,20 +833,23 @@ Ready to unlock the power of your network? Let's start!`}
               
               {messages.map((message, index) => (
                   <div key={message.id || index} className={`mb-6 ${message.role === 'user' ? 'text-right' : 'text-left'}`}>
-                    <div className={`inline-block max-w-3xl rounded-lg px-4 py-3 ${
-                      message.role === 'user' 
-                        ? 'bg-blue-600 text-white' 
-                        : 'bg-gray-100 text-gray-900'
-                    }`}>
+                  <div className={`inline-block max-w-3xl rounded-lg px-4 py-3 ${
+                    message.role === 'user' 
+                      ? 'bg-blue-600 text-white' 
+                      : 'bg-gray-100 text-gray-900'
+                  }`}>
                       <div className="text-sm prose prose-sm max-w-none dark:prose-invert">
                         <ReactMarkdown>
                           {message.content}
                         </ReactMarkdown>
-                      </div>
-                    </div>
+                  </div>
+                </div>
                   </div>
                 )
               )}
+              
+              {/* Auto-scroll target */}
+              <div ref={messagesEndRef} />
               
                              {false && (
                 <div className="mb-6 text-left">
@@ -901,18 +947,18 @@ Ready to unlock the power of your network? Let's start!`}
                    console.log('Input is empty, not sending');
                  }
                }} className="flex space-x-4">
-                                  <input
-                    type="text"
-                    value={input}
+                <input
+                  type="text"
+                  value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    placeholder="Start typing..."
-                    className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                  <Button 
-                    type="submit" 
+                  placeholder="Start typing..."
+                  className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <Button 
+                  type="submit" 
                     disabled={!input?.trim()}
-                    className="px-6"
-                  >
+                  className="px-6"
+                >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
                   </svg>
