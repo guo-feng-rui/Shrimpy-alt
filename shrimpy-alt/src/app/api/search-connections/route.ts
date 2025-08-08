@@ -3,6 +3,88 @@ import { VectorStorage } from '../../../lib/vector-storage';
 import { SmartWeighting } from '../../../lib/smart-weighting';
 import { SearchQuery, WeightedSearchResult } from '../../../lib/vector-schema';
 import { requireAuth } from '../../../lib/auth-middleware';
+import { SearchCache } from '../../../lib/search-cache';
+
+// Shared search logic to avoid duplication with caching
+async function performSearch({
+  query,
+  userId,
+  goal,
+  limit = 10
+}: {
+  query: string;
+  userId: string;
+  goal?: any;
+  limit?: number;
+}) {
+  // Check cache first
+  const cachedResult = SearchCache.get(query, userId, goal);
+  if (cachedResult) {
+    console.log('🔍 Returning cached search results for:', query);
+    return cachedResult;
+  }
+
+  console.log('🔍 Search API: Starting optimized search for query:', query);
+  console.log('🔍 Search API: User ID:', userId);
+
+  // Step 1: Calculate AI-powered smart weights
+  console.time('🔍 Total search time');
+  console.time('🔍 SmartWeighting calculation');
+  
+  console.log('🔍 Using AI-powered smart weights for search');
+  const smartWeights = await SmartWeighting.calculateSmartWeights(query, goal);
+  
+  console.timeEnd('🔍 SmartWeighting calculation');
+  console.log('🔍 Search API: Smart weights calculated:', smartWeights);
+
+  // Step 2: Perform optimized vector search
+  console.time('🔍 Vector search');
+  const searchQuery: SearchQuery = {
+    query,
+    userId,
+    weights: smartWeights,
+    goal,
+    limit: limit * 1.5 // Get slightly more results for better sorting
+  };
+  const searchResults = await VectorStorage.searchConnections(searchQuery);
+  console.timeEnd('🔍 Vector search');
+  console.log('🔍 Search API: Found', searchResults.length, 'results');
+
+  // Step 3: Results are already scored optimally by VectorStorage, just final sort and limit
+  const sortedResults = searchResults
+    .slice(0, limit)
+    .map(result => ({
+      ...result,
+      smartWeights,
+      weightedScore: result.score // Use the already calculated score
+    }));
+
+  console.timeEnd('🔍 Total search time');
+  console.log('🔍 Search API: Returning', sortedResults.length, 'optimized results');
+
+  const result = {
+    success: true,
+    query,
+    smartWeights,
+    results: sortedResults,
+    totalFound: searchResults.length,
+    searchMetadata: {
+      query,
+      userId,
+      goal,
+      smartWeights,
+      timestamp: new Date().toISOString(),
+      optimizationUsed: 'ai-powered',
+      cached: false
+    }
+  };
+
+  // Cache the result for 5 minutes
+  const ttl = 5 * 60 * 1000; // 5 minutes
+  SearchCache.set(query, userId, result, goal, ttl);
+
+  return result;
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -26,106 +108,14 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    console.log('🔍 Search API: Starting search for query:', query);
-    console.log('🔍 Search API: User ID:', finalUserId);
-    console.log('🔍 Search API: Goal:', goal);
-
-    // Step 1: Calculate smart weights (optimize for small datasets)
-    console.time('🔍 SmartWeighting calculation');
-    
-    // For small datasets, use simple keyword-based weights to avoid expensive LLM calls
-    const connectionCount = await VectorStorage.getConnectionCount(finalUserId);
-    let smartWeights;
-    
-    if (connectionCount <= 10) {
-      console.log('🔍 Using lightweight keyword-based weights for small dataset (', connectionCount, 'connections)');
-      smartWeights = SmartWeighting.calculateKeywordBasedWeights(query, goal);
-    } else {
-      console.log('🔍 Using AI-powered smart weights for larger dataset (', connectionCount, 'connections)');
-      smartWeights = await SmartWeighting.calculateSmartWeights(query, goal);
-    }
-    
-    console.timeEnd('🔍 SmartWeighting calculation');
-    console.log('🔍 Search API: Smart weights calculated:', smartWeights);
-
-    // Step 2: Perform weighted vector search (with pre-calculated weights)
-    console.time('🔍 Vector search');
-    const searchQuery: SearchQuery = {
+    const result = await performSearch({
       query,
       userId: finalUserId,
-      weights: smartWeights, // Pass pre-calculated weights to avoid duplicate AI calls
       goal,
-      limit: limit
-    };
-    const searchResults = await VectorStorage.searchConnections(searchQuery);
-    console.timeEnd('🔍 Vector search');
-    console.log('🔍 Search API: Found', searchResults.length, 'results');
-
-    // Step 3: Apply smart weighting to results with normalized scoring
-    console.time('🔍 Results processing');
-    const weightedResults = searchResults.map((result: WeightedSearchResult) => {
-      // Normalize individual scores to 0-1 range (assuming they might be small decimals)
-      const normalizeScore = (score: number) => Math.min(1, Math.max(0, score * 10)); // Scale up small scores
-      
-      const normalizedSkills = normalizeScore(result.breakdown.skillsScore);
-      const normalizedExperience = normalizeScore(result.breakdown.experienceScore);
-      const normalizedCompany = normalizeScore(result.breakdown.companyScore);
-      const normalizedLocation = normalizeScore(result.breakdown.locationScore);
-      const normalizedNetwork = normalizeScore(result.breakdown.networkScore);
-      const normalizedGoal = normalizeScore(result.breakdown.goalScore);
-      const normalizedEducation = normalizeScore(result.breakdown.educationScore);
-      
-      // Calculate weighted score using smart weights and normalized scores
-      const weightedScore = 
-        (normalizedSkills * smartWeights.skills) +
-        (normalizedExperience * smartWeights.experience) +
-        (normalizedCompany * smartWeights.company) +
-        (normalizedLocation * smartWeights.location) +
-        (normalizedNetwork * smartWeights.network) +
-        (normalizedGoal * smartWeights.goal) +
-        (normalizedEducation * smartWeights.education);
-
-      // Ensure final weighted score is between 0-1
-      const finalScore = Math.min(1, Math.max(0, weightedScore));
-
-      return {
-        ...result,
-        weightedScore: finalScore,
-        smartWeights,
-        relevanceBreakdown: {
-          skills: normalizedSkills * smartWeights.skills,
-          experience: normalizedExperience * smartWeights.experience,
-          company: normalizedCompany * smartWeights.company,
-          location: normalizedLocation * smartWeights.location,
-          network: normalizedNetwork * smartWeights.network,
-          goal: normalizedGoal * smartWeights.goal,
-          education: normalizedEducation * smartWeights.education
-        }
-      };
+      limit
     });
 
-    // Step 4: Sort by weighted score and limit results
-    const sortedResults = weightedResults
-      .sort((a, b) => b.weightedScore - a.weightedScore)
-      .slice(0, limit);
-
-    console.timeEnd('🔍 Results processing');
-    console.log('🔍 Search API: Returning', sortedResults.length, 'weighted results');
-
-    return NextResponse.json({
-      success: true,
-      query,
-      smartWeights,
-      results: sortedResults,
-      totalFound: searchResults.length,
-      searchMetadata: {
-        query,
-        userId: finalUserId,
-        goal,
-        smartWeights,
-        timestamp: new Date().toISOString()
-      }
-    });
+    return NextResponse.json(result);
 
   } catch (error) {
     console.error('🔍 Search API: Error occurred:', error);
@@ -161,82 +151,22 @@ export async function GET(req: NextRequest) {
       description: `Goal: ${goalType}`,
       keywords: [],
       preferences: {}
-    } : undefined;
+    } : {
+      type: 'general' as const,
+      description: 'General networking',
+      keywords: [],
+      preferences: {}
+    };
 
-    // Use the same logic as POST
-    const smartWeights = await SmartWeighting.calculateSmartWeights(query, goal);
-    const searchQuery: SearchQuery = {
+    // Use the same optimized logic as POST
+    const result = await performSearch({
       query,
       userId: finalUserId,
-      goal: goal || {
-        type: 'general',
-        description: 'General networking',
-        keywords: [],
-        preferences: {}
-      },
-      limit: limit
-    };
-    const searchResults = await VectorStorage.searchConnections(searchQuery);
-    
-    const weightedResults = searchResults.map((result: WeightedSearchResult) => {
-      // Normalize individual scores to 0-1 range (assuming they might be small decimals)
-      const normalizeScore = (score: number) => Math.min(1, Math.max(0, score * 10)); // Scale up small scores
-      
-      const normalizedSkills = normalizeScore(result.breakdown.skillsScore);
-      const normalizedExperience = normalizeScore(result.breakdown.experienceScore);
-      const normalizedCompany = normalizeScore(result.breakdown.companyScore);
-      const normalizedLocation = normalizeScore(result.breakdown.locationScore);
-      const normalizedNetwork = normalizeScore(result.breakdown.networkScore);
-      const normalizedGoal = normalizeScore(result.breakdown.goalScore);
-      const normalizedEducation = normalizeScore(result.breakdown.educationScore);
-      
-      // Calculate weighted score using smart weights and normalized scores
-      const weightedScore = 
-        (normalizedSkills * smartWeights.skills) +
-        (normalizedExperience * smartWeights.experience) +
-        (normalizedCompany * smartWeights.company) +
-        (normalizedLocation * smartWeights.location) +
-        (normalizedNetwork * smartWeights.network) +
-        (normalizedGoal * smartWeights.goal) +
-        (normalizedEducation * smartWeights.education);
-
-      // Ensure final weighted score is between 0-1
-      const finalScore = Math.min(1, Math.max(0, weightedScore));
-
-      return {
-        ...result,
-        weightedScore: finalScore,
-        smartWeights,
-        relevanceBreakdown: {
-          skills: normalizedSkills * smartWeights.skills,
-          experience: normalizedExperience * smartWeights.experience,
-          company: normalizedCompany * smartWeights.company,
-          location: normalizedLocation * smartWeights.location,
-          network: normalizedNetwork * smartWeights.network,
-          goal: normalizedGoal * smartWeights.goal,
-          education: normalizedEducation * smartWeights.education
-        }
-      };
+      goal,
+      limit
     });
 
-    const sortedResults = weightedResults
-      .sort((a, b) => b.weightedScore - a.weightedScore)
-      .slice(0, limit);
-
-    return NextResponse.json({
-      success: true,
-      query,
-      smartWeights,
-      results: sortedResults,
-      totalFound: searchResults.length,
-      searchMetadata: {
-        query,
-        userId: finalUserId,
-        goal,
-        smartWeights,
-        timestamp: new Date().toISOString()
-      }
-    });
+    return NextResponse.json(result);
 
   } catch (error) {
     console.error('🔍 Search API: Error occurred:', error);

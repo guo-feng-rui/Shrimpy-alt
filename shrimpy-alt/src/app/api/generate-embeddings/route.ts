@@ -1,7 +1,27 @@
 import { createAzure } from '@ai-sdk/azure';
 import { embed, embedMany } from 'ai';
 import { NextRequest, NextResponse } from 'next/server';
-import { DynamicWeights } from '../../../lib/vector-schema';
+import type { DynamicWeights } from '../../../lib/vector-schema';
+
+interface ExperienceItem {
+  title?: string;
+  company?: string;
+  duration?: string;
+  description?: string;
+  start?: { year?: number; month?: number };
+  end?: { year?: number; month?: number };
+  industry?: string;
+}
+
+interface EducationItem {
+  degree?: string;
+  institution?: string;
+  schoolName?: string;
+  field?: string;
+  fieldOfStudy?: string;
+  start?: { year?: number; month?: number };
+  end?: { year?: number; month?: number };
+}
 
 const azure = createAzure({
   resourceName: process.env.AZURE_RESOURCE_NAME || 'shrimpy-dev-tmp-resource',
@@ -32,18 +52,19 @@ export async function POST(req: NextRequest) {
     }
 
     // Generate embeddings for each vector type
-    const embeddings: Record<keyof DynamicWeights, number[]> = {
+    const embeddings: Record<keyof DynamicWeights | 'summary', number[]> = {
       skills: [],
       experience: [],
       company: [],
       location: [],
       network: [],
       goal: [],
-      education: []
+      education: [],
+      summary: []
     };
 
     // Collect all texts for batch processing
-    const textsToEmbed: { text: string; type: keyof DynamicWeights }[] = [];
+    const textsToEmbed: { text: string; type: keyof DynamicWeights | 'summary' }[] = [];
 
     // Skills embedding
     if (connectionData.skills && connectionData.skills.length > 0) {
@@ -51,20 +72,41 @@ export async function POST(req: NextRequest) {
       textsToEmbed.push({ text: skillsText, type: 'skills' });
     }
 
-    // Experience embedding
-    if (connectionData.experience) {
-      const experienceText = `${connectionData.experience.title || ''} ${connectionData.experience.company || ''} ${connectionData.experience.duration || ''}`.trim();
-      if (experienceText) {
-        textsToEmbed.push({ text: experienceText, type: 'experience' });
-      }
+    // Experience embedding (aggregate all records + description if any)
+    if (connectionData.experiences || connectionData.experience) {
+      const experiences: ExperienceItem[] = Array.isArray(connectionData.experiences)
+        ? connectionData.experiences
+        : (connectionData.experience as ExperienceItem | undefined)
+          ? [connectionData.experience]
+          : [];
+      const experienceText = experiences
+        .map((e: ExperienceItem) => {
+          const start = e.start?.year ? `${e.start.year}-${e.start.month || ''}` : '';
+          const end = e.end?.year ? `${e.end.year}-${e.end.month || ''}` : '';
+          const period = start || end ? `${start} to ${end}` : (e.duration || '');
+          return `${e.title || ''} ${e.company || ''} ${period} ${e.description || ''}`.trim();
+        })
+        .filter(Boolean)
+        .join(' | ');
+      if (experienceText) textsToEmbed.push({ text: experienceText, type: 'experience' });
     }
 
-    // Company embedding
-    if (connectionData.company) {
-      const companyText = `${connectionData.company.name || ''} ${connectionData.company.industry || ''} ${connectionData.company.size || ''}`.trim();
-      if (companyText) {
-        textsToEmbed.push({ text: companyText, type: 'company' });
+    // Company embedding (all companies from experiences if present)
+    {
+      const companyPieces: string[] = [];
+      if (Array.isArray(connectionData.experiences)) {
+        (connectionData.experiences as ExperienceItem[]).forEach((e: ExperienceItem) => {
+          const piece = `${e.company || ''} ${e.industry || ''}`.trim();
+          if (piece) companyPieces.push(piece);
+        });
       }
+      if (connectionData.company) {
+        const c = connectionData.company;
+        const piece = `${c.name || ''} ${c.industry || ''} ${c.size || ''}`.trim();
+        if (piece) companyPieces.push(piece);
+      }
+      const companyText = companyPieces.join(' | ');
+      if (companyText) textsToEmbed.push({ text: companyText, type: 'company' });
     }
 
     // Location embedding
@@ -91,19 +133,35 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Education embedding
-    if (connectionData.education) {
-      const educationText = `${connectionData.education.degree || ''} ${connectionData.education.institution || ''} ${connectionData.education.field || ''}`.trim();
-      if (educationText) {
-        textsToEmbed.push({ text: educationText, type: 'education' });
-      }
+    // Education embedding (include durations and all records)
+    if (connectionData.educations || connectionData.education) {
+      const educations: EducationItem[] = Array.isArray(connectionData.educations)
+        ? connectionData.educations
+        : (connectionData.education as EducationItem | undefined)
+          ? [connectionData.education]
+          : [];
+      const educationText = educations
+        .map((ed: EducationItem) => {
+          const start = ed.start?.year ? `${ed.start?.year}-${ed.start?.month || ''}` : '';
+          const end = ed.end?.year ? `${ed.end?.year}-${ed.end?.month || ''}` : '';
+          const duration = start || end ? `${start} to ${end}`.trim() : '';
+          return `${ed.degree || ''} ${ed.institution || ed.schoolName || ''} ${ed.field || ed.fieldOfStudy || ''} ${duration}`.trim();
+        })
+        .filter(Boolean)
+        .join(' | ');
+      if (educationText) textsToEmbed.push({ text: educationText, type: 'education' });
+    }
+
+    // Summary embedding
+    if (connectionData.summary) {
+      textsToEmbed.push({ text: String(connectionData.summary), type: 'summary' });
     }
 
     // Use batch embedding if we have multiple texts
     if (textsToEmbed.length > 1) {
       try {
-                         const { embeddings: batchEmbeddings } = await embedMany({
-          model: azure.textEmbeddingModel('text-embedding-3-large'),
+        const { embeddings: batchEmbeddings } = await embedMany({
+          model: azure.textEmbeddingModel('text-embedding-3-small'),
           values: textsToEmbed.map(item => item.text),
           maxParallelCalls: 3, // Optimize performance
         });
@@ -145,7 +203,7 @@ async function generateEmbedding(text: string): Promise<number[]> {
   try {
              // Use AI SDK's embed function with Azure OpenAI
     const { embedding } = await embed({
-      model: azure.textEmbeddingModel('text-embedding-3-large'),
+      model: azure.textEmbeddingModel('text-embedding-3-small'),
       value: text,
       maxRetries: 2, // Add retry logic
     });
@@ -160,8 +218,8 @@ async function generateEmbedding(text: string): Promise<number[]> {
 
 function generateFallbackEmbedding(text: string): number[] {
   // Improved fallback embedding based on text characteristics
-  // text-embedding-3-large uses 3072 dimensions
-  const embedding = new Array(3072).fill(0);
+  // Match text-embedding-3-small dimension (1536)
+  const embedding = new Array(1536).fill(0);
   const words = text.toLowerCase().split(/\s+/);
   
   // Create a more sophisticated hash-based embedding
@@ -169,7 +227,7 @@ function generateFallbackEmbedding(text: string): number[] {
     // Distribute the word's influence across multiple dimensions
     for (let i = 0; i < Math.min(word.length, 10); i++) {
       const char = word.charCodeAt(i);
-      const position = (wordIndex * 10 + i) % 3072;
+      const position = (wordIndex * 10 + i) % 1536;
       
       // Create a more varied embedding pattern
       let hash = 0;
@@ -189,8 +247,8 @@ function generateFallbackEmbedding(text: string): number[] {
   const hasSpecialChars = /[^a-zA-Z0-9\s]/.test(text);
   
   // Use these characteristics to influence specific dimensions
-  for (let i = 0; i < 100; i++) { // Increased for larger embedding
-    const pos = (textLength * i) % 3072;
+  for (let i = 0; i < 100; i++) { // distribute across 1536 dims
+    const pos = (textLength * i) % 1536;
     let value = 0;
     
     if (hasNumbers) value += 0.1;

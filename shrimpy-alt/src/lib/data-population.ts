@@ -4,20 +4,39 @@ import { ConnectionVectors } from './vector-schema';
 import { db } from '../../firebase.config';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 
-export interface EnrichedConnection extends Connection {
+interface ExperienceRecord {
+  title?: string;
+  company?: string;
+  duration?: string;
+  description?: string;
+  industry?: string;
+  start?: { year?: number; month?: number; day?: number };
+  end?: { year?: number; month?: number; day?: number };
+}
+
+interface EducationRecord {
+  degree?: string;
+  institution?: string;
+  schoolName?: string;
+  field?: string;
+  fieldOfStudy?: string;
+  start?: { year?: number; month?: number; day?: number };
+  end?: { year?: number; month?: number; day?: number };
+}
+
+export interface EnrichedConnection {
+  // From CSV base
+  name: string;
+  url?: string;
+  company?: string;
+  position?: string;
+  email?: string;
+  location?: string;
+  industry?: string;
   // Enhanced fields for better embedding generation
   skills?: string[];
-  experience?: {
-    title?: string;
-    company?: string;
-    duration?: string;
-  };
-  company?: {
-    name?: string;
-    industry?: string;
-    size?: string;
-  };
-  location?: {
+  experiences?: ExperienceRecord[];
+  locationInfo?: {
     city?: string;
     country?: string;
     region?: string;
@@ -32,11 +51,8 @@ export interface EnrichedConnection extends Connection {
     aspirations?: string;
     careerObjectives?: string;
   };
-  education?: {
-    degree?: string;
-    institution?: string;
-    field?: string;
-  };
+  educations?: EducationRecord[];
+  summary?: string;
 }
 
 export class DataPopulation {
@@ -78,14 +94,15 @@ export class DataPopulation {
           await VectorStorage.storeConnectionVectors({
             connectionId: doc.id, // Use the same ID as in profileCache
             userId,
-            originalConnection: connectionData,
+            originalConnection: connectionData as unknown as Record<string, unknown>,
             ...embeddings,
             skills: this.extractSkills(connectionData),
-            companies: [connectionData.company || ''],
-            locations: [connectionData.location || ''],
-            jobTitles: [connectionData.position || ''],
-            industries: [connectionData.industry || ''],
-            education: [this.extractInstitution(connectionData) || ''],
+            companies: this.extractCompanies(connectionData),
+            locations: this.extractLocations(connectionData),
+            jobTitles: this.extractJobTitles(connectionData),
+            industries: this.extractIndustries(connectionData),
+            education: this.extractEducations(connectionData),
+            summaries: connectionData.summary ? [connectionData.summary] : [],
             lastUpdated: new Date(),
             isActive: true
           });
@@ -115,26 +132,22 @@ export class DataPopulation {
   }
   
   // Convert LinkedIn CSV connections to enriched format for embeddings
-  static enrichConnections(connections: Connection[], userId: string): EnrichedConnection[] {
-    return connections.map((connection, index) => {
+  static enrichConnections(connections: Connection[]): EnrichedConnection[] {
+    return connections.map((connection) => {
       const enriched: EnrichedConnection = {
         ...connection,
         // Extract skills from position/company
         skills: this.extractSkills(connection),
-        // Structure experience data
-        experience: {
-          title: connection.position || '',
-          company: connection.company || '',
-          duration: this.estimateDuration(connection)
-        },
-        // Structure company data
-        company: {
-          name: connection.company || '',
-          industry: connection.industry || '',
-          size: this.estimateCompanySize(connection)
-        },
+        // Normalize to experiences[]
+        experiences: [
+          {
+            title: connection.position || '',
+            company: connection.company || '',
+            duration: this.estimateDuration(connection)
+          }
+        ].filter(e => e.title || e.company),
         // Structure location data
-        location: this.parseLocation(connection.location || ''),
+        locationInfo: this.parseLocation(connection.location || ''),
         // Structure network data (placeholder - would come from LinkedIn API)
         network: {
           mutualConnections: this.estimateMutualConnections(connection),
@@ -147,12 +160,14 @@ export class DataPopulation {
           aspirations: this.inferAspirations(connection),
           careerObjectives: this.inferCareerObjectives(connection)
         },
-        // Structure education data (placeholder - would come from LinkedIn)
-        education: {
-          degree: this.extractDegree(connection),
-          institution: this.extractInstitution(connection),
-          field: this.extractField(connection)
-        }
+        // Normalize to educations[]
+        educations: [
+          {
+            degree: this.extractDegree(connection),
+            institution: this.extractInstitution(connection),
+            field: this.extractField(connection)
+          }
+        ]
       };
       
       return enriched;
@@ -164,17 +179,14 @@ export class DataPopulation {
     return {
       ...connection,
       skills: this.extractSkills(connection),
-      experience: {
-        title: connection.position || '',
-        company: connection.company || '',
-        duration: this.estimateDuration(connection)
-      },
-      company: {
-        name: connection.company || '',
-        industry: connection.industry || '',
-        size: this.estimateCompanySize(connection)
-      },
-      location: this.parseLocation(connection.location || ''),
+      experiences: [
+        {
+          title: connection.position || '',
+          company: connection.company || '',
+          duration: this.estimateDuration(connection)
+        }
+      ].filter(e => e.title || e.company),
+      locationInfo: this.parseLocation(connection.location || ''),
       network: {
         mutualConnections: this.estimateMutualConnections(connection),
         alumni: this.extractAlumni(connection),
@@ -185,11 +197,13 @@ export class DataPopulation {
         aspirations: this.inferAspirations(connection),
         careerObjectives: this.inferCareerObjectives(connection)
       },
-      education: {
-        degree: this.extractDegree(connection),
-        institution: this.extractInstitution(connection),
-        field: this.extractField(connection)
-      }
+      educations: [
+        {
+          degree: this.extractDegree(connection),
+          institution: this.extractInstitution(connection),
+          field: this.extractField(connection)
+        }
+      ]
     };
   }
 
@@ -200,7 +214,7 @@ export class DataPopulation {
   ): Promise<{ success: number; failed: number; errors: string[] }> {
     console.log(`🔄 Starting data population for ${connections.length} connections...`);
     
-    const enrichedConnections = this.enrichConnections(connections, userId);
+    const enrichedConnections = this.enrichConnections(connections);
     let successCount = 0;
     let failedCount = 0;
     const errors: string[] = [];
@@ -214,14 +228,15 @@ export class DataPopulation {
         await VectorStorage.storeConnectionVectors({
           connectionId: connection.url || `connection-${Date.now()}-${Math.random()}`,
           userId,
-          originalConnection: connection,
+          originalConnection: connection as unknown as Record<string, unknown>,
           ...embeddings,
           skills: this.extractSkills(connection),
-          companies: [connection.company || ''],
-          locations: [connection.location || ''],
-          jobTitles: [connection.position || ''],
-          industries: [connection.industry || ''],
-          education: [this.extractInstitution(connection) || ''],
+          companies: this.extractCompanies(connection),
+          locations: this.extractLocations(connection),
+          jobTitles: this.extractJobTitles(connection),
+          industries: this.extractIndustries(connection),
+          education: this.extractEducations(connection),
+          summaries: connection.summary ? [connection.summary] : [],
           lastUpdated: new Date(),
           isActive: true
         });
@@ -247,7 +262,8 @@ export class DataPopulation {
     userId: string
   ): Promise<Partial<ConnectionVectors>> {
     try {
-      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+      // Use environment variable with correct port as fallback
+      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001';
       const response = await fetch(`${baseUrl}/api/generate-embeddings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -260,13 +276,14 @@ export class DataPopulation {
 
       const result = await response.json();
       return {
-        skillsVector: { vector: result.embeddings.skills, dimension: 1536, model: 'text-embedding-ada-002', timestamp: new Date() },
-        experienceVector: { vector: result.embeddings.experience, dimension: 1536, model: 'text-embedding-ada-002', timestamp: new Date() },
-        companyVector: { vector: result.embeddings.company, dimension: 1536, model: 'text-embedding-ada-002', timestamp: new Date() },
-        locationVector: { vector: result.embeddings.location, dimension: 1536, model: 'text-embedding-ada-002', timestamp: new Date() },
-        networkVector: { vector: result.embeddings.network, dimension: 1536, model: 'text-embedding-ada-002', timestamp: new Date() },
-        goalVector: { vector: result.embeddings.goal, dimension: 1536, model: 'text-embedding-ada-002', timestamp: new Date() },
-        educationVector: { vector: result.embeddings.education, dimension: 1536, model: 'text-embedding-ada-002', timestamp: new Date() }
+        skillsVector: { vector: result.embeddings.skills, dimension: 1536, model: 'text-embedding-3-small', timestamp: new Date() },
+        experienceVector: { vector: result.embeddings.experience, dimension: 1536, model: 'text-embedding-3-small', timestamp: new Date() },
+        companyVector: { vector: result.embeddings.company, dimension: 1536, model: 'text-embedding-3-small', timestamp: new Date() },
+        locationVector: { vector: result.embeddings.location, dimension: 1536, model: 'text-embedding-3-small', timestamp: new Date() },
+        networkVector: { vector: result.embeddings.network, dimension: 1536, model: 'text-embedding-3-small', timestamp: new Date() },
+        goalVector: { vector: result.embeddings.goal, dimension: 1536, model: 'text-embedding-3-small', timestamp: new Date() },
+        educationVector: { vector: result.embeddings.education, dimension: 1536, model: 'text-embedding-3-small', timestamp: new Date() },
+        summaryVector: { vector: result.embeddings.summary, dimension: 1536, model: 'text-embedding-3-small', timestamp: new Date() }
       };
     } catch (error) {
       console.error('Embedding generation failed:', error);
@@ -292,7 +309,8 @@ export class DataPopulation {
       locationVector: { vector: fallbackVector, dimension: 1536, model: 'fallback', timestamp: new Date() },
       networkVector: { vector: fallbackVector, dimension: 1536, model: 'fallback', timestamp: new Date() },
       goalVector: { vector: fallbackVector, dimension: 1536, model: 'fallback', timestamp: new Date() },
-      educationVector: { vector: fallbackVector, dimension: 1536, model: 'fallback', timestamp: new Date() }
+      educationVector: { vector: fallbackVector, dimension: 1536, model: 'fallback', timestamp: new Date() },
+      summaryVector: { vector: fallbackVector, dimension: 1536, model: 'fallback', timestamp: new Date() }
     };
   }
 
@@ -308,6 +326,49 @@ export class DataPopulation {
       });
     }
     return skills;
+  }
+
+  private static extractCompanies(connection: Connection | EnrichedConnection): string[] {
+    const companies: string[] = [];
+    const experiences: ExperienceRecord[] = (connection as EnrichedConnection).experiences || [];
+    experiences.forEach(e => { if (e?.company) companies.push(String(e.company)); });
+    if (connection.company) companies.push(connection.company);
+    return companies.filter(Boolean);
+  }
+
+  private static extractLocations(connection: Connection | EnrichedConnection): string[] {
+    const locations: string[] = [];
+    if (connection.location) locations.push(connection.location);
+    return locations.filter(Boolean);
+  }
+
+  private static extractJobTitles(connection: Connection | EnrichedConnection): string[] {
+    const titles: string[] = [];
+    const experiences: ExperienceRecord[] = (connection as EnrichedConnection).experiences || [];
+    experiences.forEach(e => { if (e?.title) titles.push(String(e.title)); });
+    if (connection.position) titles.push(connection.position);
+    return titles.filter(Boolean);
+  }
+
+  private static extractIndustries(connection: Connection | EnrichedConnection): string[] {
+    const industries: string[] = [];
+    const experiences: ExperienceRecord[] = (connection as EnrichedConnection).experiences || [];
+    experiences.forEach(e => { if (e?.industry) industries.push(String(e.industry)); });
+    if ((connection as any).industry) industries.push(String((connection as any).industry));
+    return industries.filter(Boolean);
+  }
+
+  private static extractEducations(connection: Connection | EnrichedConnection): string[] {
+    const educations: string[] = [];
+    const list: EducationRecord[] = (connection as EnrichedConnection).educations || [];
+    list.forEach(ed => {
+      const start = ed.start?.year ? `${ed.start.year}-${ed.start.month || ''}` : '';
+      const end = ed.end?.year ? `${ed.end.year}-${ed.end.month || ''}` : '';
+      const duration = start || end ? `${start} to ${end}`.trim() : '';
+      const piece = `${ed.degree || ''} ${ed.institution || ed.schoolName || ''} ${ed.field || ed.fieldOfStudy || ''} ${duration}`.trim();
+      if (piece) educations.push(piece);
+    });
+    return educations.filter(Boolean);
   }
 
   private static estimateDuration(connection: Connection): string {

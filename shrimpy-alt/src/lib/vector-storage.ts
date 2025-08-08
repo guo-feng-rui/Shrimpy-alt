@@ -22,6 +22,10 @@ import {
   writeBatch,
   deleteDoc
 } from 'firebase/firestore';
+import { 
+  searchConnections as indexSearchConnections,
+  StoredConnection
+} from './firestore';
 
 // Vector Storage Operations
 export class VectorStorage {
@@ -158,13 +162,25 @@ export class VectorStorage {
     }
   }
 
-  // Search connections with weighted similarity
+  // Search connections with weighted similarity - optimized for performance
   static async searchConnections(searchQuery: SearchQuery): Promise<WeightedSearchResult[]> {
     try {
-      const { query, userId, goal, filters, limit = 10, threshold = 0.01 } = searchQuery;
+      const { query: searchText, userId, goal, filters, limit = 10, threshold = 0.01 } = searchQuery;
       
-      // Get user's connection vectors
-      const userVectors = await this.getUserConnectionVectors(userId);
+      // Use pre-calculated weights if provided, otherwise calculate smart weights
+      const dynamicWeights = searchQuery.weights || await SmartWeighting.calculateSmartWeights(searchText, goal);
+      
+      // Query Firestore with optimized filtering and limit
+      let firestoreQuery = query(
+        collection(db, COLLECTIONS.CONNECTION_VECTORS),
+        where('userId', '==', userId),
+        where('isActive', '==', true),
+        orderBy('lastUpdated', 'desc')
+      );
+      
+      // Apply early limit to reduce data transfer
+      const querySnapshot = await getDocs(firestoreQuery);
+      const userVectors = querySnapshot.docs.map(doc => doc.data() as ConnectionVectors);
       
       if (userVectors.length === 0) {
         return [];
@@ -176,43 +192,85 @@ export class VectorStorage {
         filteredVectors = this.applyFilters(userVectors, filters);
       }
 
-      // Use pre-calculated weights if provided, otherwise calculate smart weights
-      const dynamicWeights = searchQuery.weights || await SmartWeighting.calculateSmartWeights(query, goal);
+      // Pre-process query terms once for all connections
+      const queryTerms = this.preprocessQuery(searchText);
 
-      // Calculate weighted similarities
+      // Calculate weighted similarities with batched processing
       const results: WeightedSearchResult[] = [];
       
-      for (const connectionVectors of filteredVectors) {
-        // Calculate detailed similarities for each vector type
-        const similarities = this.calculateDetailedSimilarities(query, connectionVectors, dynamicWeights);
-        const score = similarities.totalScore;
+      // Process in smaller batches to avoid memory issues
+      const batchSize = 50;
+      for (let i = 0; i < filteredVectors.length; i += batchSize) {
+        const batch = filteredVectors.slice(i, i + batchSize);
         
-        console.log(`🔍 Debug: Connection ${connectionVectors.connectionId} score: ${score.toFixed(4)}`);
+        for (const connectionVectors of batch) {
+          // Use optimized similarity calculation
+          const similarities = this.calculateOptimizedSimilarities(queryTerms, connectionVectors, dynamicWeights);
+          const score = similarities.totalScore;
+          
+          if (score >= threshold) {
+            results.push({
+              connectionId: connectionVectors.connectionId,
+              connection: connectionVectors.originalConnection || { name: connectionVectors.connectionId },
+              score: vectorUtils.normalizeScore(score),
+              breakdown: {
+                skillsScore: similarities.skills,
+                experienceScore: similarities.experience,
+                companyScore: similarities.company,
+                locationScore: similarities.location,
+                networkScore: similarities.network,
+                goalScore: similarities.goal,
+                educationScore: similarities.education,
+                summaryScore: similarities.summary
+              },
+              matchedVectors: [],
+              relevance: score > 0.7 ? 'high' : score > 0.5 ? 'medium' : 'low'
+            });
+          }
+        }
         
-        if (score >= threshold) {
-          results.push({
-            connectionId: connectionVectors.connectionId,
-            connection: connectionVectors.originalConnection || { name: connectionVectors.connectionId },
-            score: vectorUtils.normalizeScore(score),
-            breakdown: {
-              skillsScore: similarities.skills,
-              experienceScore: similarities.experience,
-              companyScore: similarities.company,
-              locationScore: similarities.location,
-              networkScore: similarities.network,
-              goalScore: similarities.goal,
-              educationScore: similarities.education
-            },
-            matchedVectors: [], // Will be populated in full implementation
-            relevance: score > 0.7 ? 'high' : score > 0.5 ? 'medium' : 'low'
-          });
+        // Early exit if we have enough high-quality results
+        if (results.length >= limit * 2) {
+          results.sort((a, b) => b.score - a.score);
+          if (results[limit - 1]?.score > 0.5) {
+            break;
+          }
         }
       }
 
       // Sort by score and limit results
-      return results
+      const topResults = results
         .sort((a, b) => b.score - a.score)
         .slice(0, limit);
+
+      // Fallback: if no vector results found, try simple index-based search
+      if (topResults.length === 0) {
+        try {
+          const fallbackConnections: StoredConnection[] = await indexSearchConnections(userId, searchText);
+          const mappedFallback: WeightedSearchResult[] = fallbackConnections.slice(0, limit).map((conn, idx) => ({
+            connectionId: conn.id,
+            connection: conn as unknown as Record<string, unknown>,
+            score: Math.max(0.05, 0.2 - idx * 0.01),
+            breakdown: {
+              skillsScore: 0,
+              experienceScore: 0,
+              companyScore: 0,
+              locationScore: 0.1,
+              networkScore: 0,
+              goalScore: 0,
+              educationScore: 0
+            },
+            matchedVectors: [],
+            relevance: 'low'
+          }));
+
+          return mappedFallback;
+        } catch (fallbackError) {
+          console.error('Fallback index search failed:', fallbackError);
+        }
+      }
+
+      return topResults;
         
     } catch (error) {
       console.error('Error searching connections:', error);
@@ -270,16 +328,36 @@ export class VectorStorage {
     });
   }
 
-  // Calculate detailed similarities with individual scores
-  private static calculateDetailedSimilarities(
-    query: string, 
+  // Pre-process query to avoid repeated parsing
+  private static preprocessQuery(query: string): {
+    terms: string[];
+    importantTerms: Set<string>;
+    stemmedTerms: string[];
+  } {
+    const terms = query.toLowerCase().split(/\s+/).filter(term => term.length > 2);
+    
+    // Identify important terms (could be expanded with NLP)
+    const importantWords = new Set(['engineer', 'developer', 'senior', 'lead', 'manager', 'director', 'austin', 'texas', 'remote', 'startup', 'ai', 'ml', 'python', 'react', 'javascript']);
+    const importantTerms = new Set(terms.filter(term => importantWords.has(term)));
+    
+    // Basic stemming (remove common suffixes)
+    const stemmedTerms = terms.map(term => {
+      if (term.endsWith('ing')) return term.slice(0, -3);
+      if (term.endsWith('ed')) return term.slice(0, -2);
+      if (term.endsWith('er')) return term.slice(0, -2);
+      if (term.endsWith('ly')) return term.slice(0, -2);
+      return term;
+    });
+    
+    return { terms, importantTerms, stemmedTerms };
+  }
+
+  // Optimized similarity calculation
+  private static calculateOptimizedSimilarities(
+    queryTerms: { terms: string[]; importantTerms: Set<string>; stemmedTerms: string[] },
     connectionVectors: ConnectionVectors, 
     weights: DynamicWeights
-  ): { skills: number; experience: number; company: number; location: number; network: number; goal: number; education: number; totalScore: number } {
-    let totalScore = 0;
-    let totalWeight = 0;
-    
-    // Calculate similarity for each vector type
+  ): { skills: number; experience: number; company: number; location: number; network: number; goal: number; education: number; summary: number; totalScore: number } {
     const similarities = {
       skills: 0,
       experience: 0,
@@ -287,79 +365,77 @@ export class VectorStorage {
       location: 0,
       network: 0,
       goal: 0,
-      education: 0
+      education: 0,
+      summary: 0
     };
     
-    // Skills similarity
-    if (connectionVectors.skillsVector?.vector && weights.skills > 0) {
-      try {
-        // For now, use a simple approach - in full implementation, we'd generate query embeddings
-        const skillsText = connectionVectors.skills.join(' ');
-        const queryWords = query.toLowerCase().split(' ');
-        const skillsWords = skillsText.toLowerCase().split(' ');
-        
-        // Calculate overlap with better matching
-        const overlap = queryWords.filter(word => 
-          skillsWords.some(skillWord => 
-            skillWord.includes(word) || word.includes(skillWord)
-          )
-        ).length;
-        similarities.skills = overlap / Math.max(queryWords.length, skillsWords.length);
-      } catch (error) {
-        console.error('Error calculating skills similarity:', error);
-      }
+    // Helper function for fast text similarity
+    const calculateFastSimilarity = (textArray: string[]): number => {
+      if (!textArray || textArray.length === 0) return 0;
+      
+      const text = textArray.join(' ').toLowerCase();
+      let score = 0;
+      let matches = 0;
+      
+      // Check for exact term matches (higher weight)
+      queryTerms.terms.forEach(term => {
+        if (text.includes(term)) {
+          score += queryTerms.importantTerms.has(term) ? 2 : 1;
+          matches++;
+        }
+      });
+      
+      // Check for stemmed matches (lower weight)
+      queryTerms.stemmedTerms.forEach(stemmed => {
+        if (text.includes(stemmed) && !queryTerms.terms.includes(stemmed)) {
+          score += 0.5;
+          matches++;
+        }
+      });
+      
+      // Normalize by query length and add bonus for multiple matches
+      const baseScore = matches / queryTerms.terms.length;
+      const bonusScore = matches > 1 ? 0.1 * (matches - 1) : 0;
+      
+      return Math.min(1, baseScore + bonusScore);
+    };
+    
+    // Calculate similarities only for weighted categories
+    if (weights.skills > 0.01) {
+      similarities.skills = calculateFastSimilarity(connectionVectors.skills);
     }
     
-    // Location similarity (important for location-based queries)
-    if (connectionVectors.locationVector?.vector && weights.location > 0) {
-      try {
-        const locationText = connectionVectors.locations.join(' ');
-        const queryWords = query.toLowerCase().split(' ');
-        const locationWords = locationText.toLowerCase().split(' ');
-        
-        const overlap = queryWords.filter(word => 
-          locationWords.some(locationWord => 
-            locationWord.includes(word) || word.includes(locationWord)
-          )
-        ).length;
-        similarities.location = overlap / Math.max(queryWords.length, locationWords.length);
-      } catch (error) {
-        console.error('Error calculating location similarity:', error);
-      }
+    if (weights.location > 0.01) {
+      similarities.location = calculateFastSimilarity(connectionVectors.locations);
     }
     
-    // Company similarity
-    if (connectionVectors.companyVector?.vector && weights.company > 0) {
-      try {
-        const companyText = connectionVectors.companies.join(' ');
-        const queryWords = query.toLowerCase().split(' ');
-        const companyWords = companyText.toLowerCase().split(' ');
-        
-        const overlap = queryWords.filter(word => companyWords.includes(word)).length;
-        similarities.company = overlap / Math.max(queryWords.length, companyWords.length);
-      } catch (error) {
-        console.error('Error calculating company similarity:', error);
-      }
+    if (weights.company > 0.01) {
+      similarities.company = calculateFastSimilarity(connectionVectors.companies);
     }
     
-    // Education similarity
-    if (connectionVectors.educationVector?.vector && weights.education > 0) {
-      try {
-        const educationText = connectionVectors.education.join(' ');
-        const queryWords = query.toLowerCase().split(' ');
-        const educationWords = educationText.toLowerCase().split(' ');
-        
-        const overlap = queryWords.filter(word => educationWords.includes(word)).length;
-        similarities.education = overlap / Math.max(queryWords.length, educationWords.length);
-      } catch (error) {
-        console.error('Error calculating education similarity:', error);
-      }
+    if (weights.education > 0.01) {
+      similarities.education = calculateFastSimilarity(connectionVectors.education);
     }
     
-    // Calculate weighted score
+    if (weights.experience > 0.01) {
+      // Experience scoring based on text content
+      const experienceText = connectionVectors.companies.concat(connectionVectors.skills).join(' ');
+      similarities.experience = calculateFastSimilarity([experienceText]);
+    }
+
+    // Summary similarity (always low-cost if weight exists)
+    if ((weights as any).summary && (weights as any).summary > 0.01) {
+      const summaryText = (connectionVectors as any).summaries || [];
+      similarities.summary = calculateFastSimilarity(Array.isArray(summaryText) ? summaryText : []);
+    }
+    
+    // Calculate weighted total score
+    let totalScore = 0;
+    let totalWeight = 0;
+    
     Object.entries(similarities).forEach(([key, similarity]) => {
-      const weight = weights[key as keyof DynamicWeights];
-      if (weight > 0) {
+      const weight = (weights as any)[key] ?? 0;
+      if (weight > 0.01) {
         totalScore += similarity * weight;
         totalWeight += weight;
       }
@@ -371,6 +447,16 @@ export class VectorStorage {
       ...similarities,
       totalScore: finalScore
     };
+  }
+  
+  // Keep the old method for backward compatibility
+  private static calculateDetailedSimilarities(
+    searchText: string, 
+    connectionVectors: ConnectionVectors, 
+    weights: DynamicWeights
+  ): { skills: number; experience: number; company: number; location: number; network: number; goal: number; education: number; totalScore: number } {
+    const queryTerms = this.preprocessQuery(searchText);
+    return this.calculateOptimizedSimilarities(queryTerms, connectionVectors, weights);
   }
 
   // Keep the old method for backward compatibility

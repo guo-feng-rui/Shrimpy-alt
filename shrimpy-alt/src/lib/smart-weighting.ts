@@ -1,5 +1,12 @@
 // Smart Weighting System using Semantic Analysis and AI
-import { UserGoal } from './vector-schema';
+
+// Define UserGoal interface locally to avoid circular imports
+interface UserGoal {
+  type: 'job_search' | 'startup_building' | 'mentorship' | 'skill_development' | 'industry_networking' | 'general';
+  description: string;
+  keywords: string[];
+  preferences: Record<string, unknown>;
+}
 
 // Dynamic weight configuration for search criteria
 export interface DynamicWeights {
@@ -10,6 +17,7 @@ export interface DynamicWeights {
   network: number;        // Weight for mutual connections and network overlap
   goal: number;          // Weight for user's stated goals and objectives
   education: number;      // Weight for educational background
+  summary: number;       // Weight for profile summary/about
 }
 
 // LLM-based semantic analysis categories (for reference only)
@@ -104,7 +112,8 @@ export class SmartWeighting {
       location: 0,
       network: 0,
       goal: 0,
-      education: 0
+      education: 0,
+      summary: 0
     };
     
     try {
@@ -141,7 +150,8 @@ export class SmartWeighting {
       location: 0,
       network: 0,
       goal: 0,
-      education: 0
+      education: 0,
+      summary: 0
     };
     
     const queryLower = query.toLowerCase();
@@ -167,6 +177,9 @@ export class SmartWeighting {
     }
     if (queryLower.includes('education') || queryLower.includes('degree') || queryLower.includes('university')) {
       patterns.education = 0.3;
+    }
+    if (queryLower.includes('summary') || queryLower.includes('about')) {
+      patterns.summary = 0.2;
     }
     
     return patterns;
@@ -258,106 +271,68 @@ export class SmartWeighting {
     return this.normalizeWeights(adjustedWeights);
   }
   
-  // Lightweight keyword-based weighting for small datasets (no LLM calls)
-  static calculateKeywordBasedWeights(
-    query: string, 
-    userGoal?: UserGoal
-  ): DynamicWeights {
-    const queryLower = query.toLowerCase();
-    
-    // Base weights
-    const baseWeights: DynamicWeights = {
+  // Default balanced weights as fallback
+  static getDefaultWeights(): DynamicWeights {
+    return {
       skills: 0.25,
       experience: 0.20,
       company: 0.15,
       location: 0.15,
       network: 0.10,
       goal: 0.10,
-      education: 0.05
+      education: 0.05,
+      summary: 0.0
     };
-    
-    // Boost weights based on keywords
-    if (queryLower.includes('engineer') || queryLower.includes('developer') || queryLower.includes('ml') || queryLower.includes('ai') || queryLower.includes('python') || queryLower.includes('react')) {
-      baseWeights.skills = 0.4;
-      baseWeights.experience = 0.25;
-    }
-    
-    if (queryLower.includes('austin') || queryLower.includes('texas') || queryLower.includes('location') || queryLower.includes('remote')) {
-      baseWeights.location = 0.3;
-      baseWeights.skills = Math.max(0.2, baseWeights.skills - 0.1);
-    }
-    
-    if (queryLower.includes('senior') || queryLower.includes('lead') || queryLower.includes('experience') || queryLower.includes('years')) {
-      baseWeights.experience = 0.35;
-      baseWeights.skills = Math.max(0.2, baseWeights.skills - 0.1);
-    }
-    
-    if (queryLower.includes('company') || queryLower.includes('startup') || queryLower.includes('enterprise')) {
-      baseWeights.company = 0.25;
-    }
-    
-    // Normalize to ensure weights sum to 1
-    return this.normalizeWeights(baseWeights);
   }
 
-  // Main smart weighting function
+  // Main smart weighting function - optimized to use single API call
   static async calculateSmartWeights(
     query: string, 
     userGoal?: UserGoal
   ): Promise<DynamicWeights> {
-    // Step 1: AI-powered intent analysis
-    console.time('🔍 AI intent analysis');
-    const intentAnalysis = await this.analyzeSemanticIntent(query);
-    console.timeEnd('🔍 AI intent analysis');
-    
-    // Step 2: LLM-powered pattern recognition
-    console.time('🔍 Pattern recognition');
-    const patternWeights = await this.detectPatterns(query);
-    console.timeEnd('🔍 Pattern recognition');
-    
-    // Step 3: Contextual analysis
-    const context = this.analyzeContext(query);
-    
-    // Step 4: Combine analyses
-    const combinedWeights: DynamicWeights = {
-      skills: 0,
-      experience: 0,
-      company: 0,
-      location: 0,
-      network: 0,
-      goal: 0,
-      education: 0
-    };
-    
-    // Weight the different analysis methods
-    const aiWeight = 0.6;    // AI analysis gets highest weight
-    const patternWeight = 0.3; // Pattern recognition
-    const contextWeight = 0.1; // Contextual factors
-    
-    Object.keys(combinedWeights).forEach(aspect => {
-      const aspectKey = aspect as keyof DynamicWeights;
+    try {
+      // Single optimized AI analysis call instead of two separate calls
+      console.time('🔍 Combined AI analysis');
+      const intentAnalysis = await this.analyzeSemanticIntent(query);
+      console.timeEnd('🔍 Combined AI analysis');
       
-      // AI analysis contribution
-      const aiContribution = aspectKey === intentAnalysis.primaryIntent ? 0.8 : 0.1;
+      // Step 2: Contextual analysis (lightweight, no API calls)
+      const context = this.analyzeContext(query);
       
-      // Pattern recognition contribution
-      const patternContribution = patternWeights[aspectKey];
+      // Step 3: Create base weights from intent analysis
+      const combinedWeights: DynamicWeights = {
+        skills: 0.15,
+        experience: 0.15,
+        company: 0.15,
+        location: 0.15,
+        network: 0.15,
+        goal: 0.15,
+        education: 0.1,
+        summary: 0.05
+      };
       
-      // Context contribution
-      const contextContribution = context.specificity === 'specific' ? 0.2 : 0.1;
+      // Boost primary intent significantly
+      combinedWeights[intentAnalysis.primaryIntent] = 0.4;
       
-      combinedWeights[aspectKey] = 
-        (aiContribution * aiWeight) +
-        (patternContribution * patternWeight) +
-        (contextContribution * contextWeight);
-    });
-    
-    // Step 5: Apply goal adjustments if available
-    if (userGoal) {
-      return this.applyGoalAdjustments(combinedWeights, userGoal, intentAnalysis);
+      // Boost secondary intents moderately
+      intentAnalysis.secondaryIntents.forEach(({ intent, confidence }) => {
+        if (confidence > 0.5 && intent !== intentAnalysis.primaryIntent) {
+          combinedWeights[intent] = Math.min(0.3, combinedWeights[intent] + confidence * 0.2);
+        }
+      });
+      
+      // Step 4: Apply goal adjustments if available
+      if (userGoal) {
+        return this.applyGoalAdjustments(combinedWeights, userGoal, intentAnalysis);
+      }
+      
+      return this.normalizeWeights(combinedWeights);
+      
+    } catch (error) {
+      console.error('Smart weighting failed, using default weights:', error);
+      // Fallback to balanced default weights
+      return this.getDefaultWeights();
     }
-    
-    return this.normalizeWeights(combinedWeights);
   }
   
   // Helper: Normalize weights to sum to 1

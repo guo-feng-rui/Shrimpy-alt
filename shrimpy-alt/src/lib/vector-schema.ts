@@ -1,6 +1,9 @@
 // Vector Storage Schema for Multi-Vector RAG with Dynamic Weighting
 
-import { DynamicWeights } from './smart-weighting';
+import type { DynamicWeights } from './smart-weighting';
+
+// Re-export DynamicWeights for convenience  
+export type { DynamicWeights } from './smart-weighting';
 
 export interface VectorEmbedding {
   vector: number[];  // The actual embedding vector
@@ -23,6 +26,7 @@ export interface ConnectionVectors {
   networkVector: VectorEmbedding;
   goalVector: VectorEmbedding;
   educationVector: VectorEmbedding;
+  summaryVector: VectorEmbedding;
   
   // Metadata for search optimization
   skills: string[];        // Extracted skills for filtering
@@ -31,6 +35,7 @@ export interface ConnectionVectors {
   jobTitles: string[];     // Job titles for filtering
   industries: string[];    // Industries for filtering
   education: string[];     // Education institutions and degrees
+  summaries?: string[];    // Profile summaries or about text
   
   // Search metadata
   lastUpdated: Date;
@@ -81,6 +86,7 @@ export interface WeightedSearchResult {
     networkScore: number;
     goalScore: number;
     educationScore: number;
+    summaryScore?: number;
   };
   matchedVectors: string[];
   relevance: 'high' | 'medium' | 'low';

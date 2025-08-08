@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run build:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm run dev:*)",
+      "Bash(powershell:*)",
+      "Bash(set NEXT_TELEMETRY_DISABLED=1)",
+      "Bash(set NEXT_DISABLE_TRACING=1)",
+      "Bash(node:*)",
+      "Bash(git checkout:*)",
+      "Bash(timeout 30 node:*)"
+    ],
+    "deny": []
+  }
+}
