@@ -3,6 +3,7 @@ import { VectorStorage } from './vector-storage';
 import { ConnectionVectors } from './vector-schema';
 import { db } from '../../firebase.config';
 import { collection, getDocs, query, where } from 'firebase/firestore';
+import type { ProfileData } from './profile-parser';
 
 interface ExperienceRecord {
   title?: string;
@@ -55,6 +56,12 @@ export interface EnrichedConnection {
   summary?: string;
 }
 
+// Payload containing only the vector fields of ConnectionVectors
+export type ConnectionVectorPayload = Pick<ConnectionVectors,
+  'skillsVector' | 'experienceVector' | 'companyVector' | 'locationVector' |
+  'networkVector' | 'goalVector' | 'educationVector' | 'summaryVector'
+>;
+
 export class DataPopulation {
   
   // Step 3: Generate embeddings from existing Firestore data (test-connections collection)
@@ -67,7 +74,7 @@ export class DataPopulation {
       const q = query(testConnectionsRef, where('userId', '==', userId));
       const querySnapshot = await getDocs(q);
       
-      console.log(`📊 Found ${querySnapshot.size} connections in test-connections`);
+      console.log(`📊 [generateEmbeddingsFromFirestore] Found ${querySnapshot.size} connections in test-connections for user ${userId}`);
       
       if (querySnapshot.size === 0) {
         console.log('⚠️ No connections found in test-connections collection');
@@ -82,13 +89,15 @@ export class DataPopulation {
       for (const doc of querySnapshot.docs) {
         try {
           const connectionData = doc.data() as Connection;
-          console.log(`🔄 Processing connection: ${connectionData.name}`);
+          console.log(`🔄 [generateEmbeddingsFromFirestore] Processing doc ${doc.id} name=${connectionData.name}`);
           
           // Enrich the connection data
           const enrichedConnection = this.enrichConnection(connectionData);
+          console.log(`🧩 [generateEmbeddingsFromFirestore] Enriched sizes: skills=${enrichedConnection.skills?.length || 0}, exp=${enrichedConnection.experiences?.length || 0}, edu=${enrichedConnection.educations?.length || 0}`);
           
           // Generate embeddings for this connection
           const embeddings = await this.generateConnectionEmbeddings(enrichedConnection, userId);
+          console.log(`📐 [generateEmbeddingsFromFirestore] Got vectors for ${doc.id}:` , Object.keys(embeddings));
           
           // Store embeddings in connection_vectors collection
           await VectorStorage.storeConnectionVectors({
@@ -108,13 +117,13 @@ export class DataPopulation {
           });
           
           successCount++;
-          console.log(`✅ Generated and stored embeddings for: ${connectionData.name}`);
+          console.log(`✅ [generateEmbeddingsFromFirestore] Stored vectors for: ${doc.id}`);
           
         } catch (error) {
           failedCount++;
           const errorMsg = `Failed to process ${doc.data().name}: ${error instanceof Error ? error.message : 'Unknown error'}`;
           errors.push(errorMsg);
-          console.error(`❌ ${errorMsg}`);
+          console.error(`❌ [generateEmbeddingsFromFirestore] ${errorMsg}`, error);
         }
       }
       
@@ -129,6 +138,152 @@ export class DataPopulation {
         errors: [`Failed to access Firestore: ${error instanceof Error ? error.message : 'Unknown error'}`] 
       };
     }
+  }
+
+  // Generate embeddings for profiles saved in profileCache for a user
+  static async generateEmbeddingsFromProfileCache(userId: string): Promise<{ success: number; failed: number; errors: string[] }> {
+    console.log(`🔄 [generateEmbeddingsFromProfileCache] Start for user: ${userId}`);
+    try {
+      const cacheRef = collection(db, 'profileCache');
+      const q = query(cacheRef, where('userId', '==', userId));
+      const snapshot = await getDocs(q);
+
+      console.log(`📊 [generateEmbeddingsFromProfileCache] Found ${snapshot.size} cached profiles for user ${userId}`);
+      if (snapshot.size === 0) {
+        console.log('⚠️ [generateEmbeddingsFromProfileCache] No cached profiles found for user');
+        return { success: 0, failed: 0, errors: ['No cached profiles found'] };
+      }
+
+      let success = 0;
+      let failed = 0;
+      const errors: string[] = [];
+
+      for (const docSnap of snapshot.docs) {
+        try {
+          const cached = docSnap.data() as { data?: ProfileData; url?: string };
+          const profile: ProfileData = (cached.data || ({} as ProfileData));
+          const url: string | undefined = cached.url;
+          console.log(`🔎 [generateEmbeddingsFromProfileCache] Doc ${docSnap.id} url=${url}`);
+          const enriched = this.mapProfileDataToEnrichedConnection(profile, url);
+          console.log(`🧩 [generateEmbeddingsFromProfileCache] Enriched ${docSnap.id}: skills=${enriched.skills?.length || 0}, exp=${enriched.experiences?.length || 0}, edu=${enriched.educations?.length || 0}`);
+
+          const embeddings = await this.generateConnectionEmbeddings(enriched, userId);
+          console.log(`📐 [generateEmbeddingsFromProfileCache] Got vectors for ${docSnap.id}:`, Object.keys(embeddings));
+
+          await VectorStorage.storeConnectionVectors({
+            connectionId: docSnap.id,
+            userId,
+            originalConnection: enriched as unknown as Record<string, unknown>,
+            ...embeddings,
+            skills: this.extractSkills(enriched as unknown as EnrichedConnection),
+            companies: this.extractCompanies(enriched),
+            locations: this.extractLocations(enriched),
+            jobTitles: this.extractJobTitles(enriched),
+            industries: this.extractIndustries(enriched),
+            education: this.extractEducations(enriched),
+            summaries: enriched.summary ? [enriched.summary] : [],
+            lastUpdated: new Date(),
+            isActive: true
+          });
+
+          success++;
+          console.log(`✅ [generateEmbeddingsFromProfileCache] Stored vectors for ${docSnap.id} name=${enriched.name}`);
+        } catch (err) {
+          failed++;
+          const msg = err instanceof Error ? err.message : 'Unknown error';
+          errors.push(msg);
+          console.error(`❌ [generateEmbeddingsFromProfileCache] Failed for ${docSnap.id}:`, err);
+        }
+      }
+
+      return { success, failed, errors };
+    } catch (error) {
+      console.error('❌ [generateEmbeddingsFromProfileCache] Failed to read profileCache:', error);
+      return { success: 0, failed: 0, errors: [error instanceof Error ? error.message : 'Unknown error'] };
+    }
+  }
+
+  // Map ProfileData (from profileCache) to EnrichedConnection
+  private static mapProfileDataToEnrichedConnection(profile: ProfileData, url?: string): EnrichedConnection {
+    const fullName = profile.name || [profile.firstName, profile.lastName].filter(Boolean).join(' ') || profile.username || url || 'Unknown';
+
+    // Experiences from positions/fullPositions/legacy experience
+    const experiences: ExperienceRecord[] = [];
+    type PositionLike = {
+      title?: string;
+      companyName?: string;
+      description?: string;
+      companyIndustry?: string;
+      start?: { year?: number; month?: number; day?: number };
+      end?: { year?: number; month?: number; day?: number };
+    };
+    type LegacyExperienceLike = { title?: string; company?: string; duration?: string };
+    const positions = (profile.position || []) as PositionLike[];
+    const fullPositions = (profile.fullPositions || []) as PositionLike[];
+    const legacyExperience = (profile.experience || []) as LegacyExperienceLike[];
+
+    positions.forEach((p) => {
+      experiences.push({
+        title: p.title,
+        company: p.companyName,
+        description: p.description,
+        industry: p.companyIndustry,
+        start: p.start,
+        end: p.end
+      });
+    });
+    fullPositions.forEach((p) => {
+      experiences.push({
+        title: p.title,
+        company: p.companyName,
+        description: p.description,
+        industry: p.companyIndustry,
+        start: p.start,
+        end: p.end
+      });
+    });
+    legacyExperience.forEach((e) => {
+      experiences.push({
+        title: e.title,
+        company: e.company,
+        duration: e.duration
+      });
+    });
+
+    // Educations
+    const educations: EducationRecord[] = (profile.educations || []).map((ed) => ({
+      degree: ed.degree,
+      institution: ed.schoolName,
+      field: ed.fieldOfStudy,
+      start: ed.start,
+      end: ed.end
+    }));
+
+    // Skills
+    const skills: string[] = [];
+    if (Array.isArray(profile.skills)) skills.push(...profile.skills);
+    if (Array.isArray(profile.skillsDetailed)) skills.push(...profile.skillsDetailed.map(s => s.name));
+
+    // Pick a current position/company for top-level fields if available
+    const current = positions[0] || fullPositions[0] || null;
+
+    // Location text
+    const locationText = profile.geo?.full || profile.location || '';
+
+    const enriched: EnrichedConnection = {
+      name: fullName.trim(),
+      url,
+      company: current?.companyName,
+      position: current?.title,
+      location: locationText,
+      industry: current?.companyIndustry,
+      skills: Array.from(new Set(skills)).filter(Boolean),
+      experiences,
+      educations,
+      summary: profile.summary || profile.headline
+    };
+
+    return enriched;
   }
   
   // Convert LinkedIn CSV connections to enriched format for embeddings
@@ -256,25 +411,33 @@ export class DataPopulation {
     return { success: successCount, failed: failedCount, errors };
   }
 
-  // Generate embeddings for a single connection
   private static async generateConnectionEmbeddings(
     connection: EnrichedConnection, 
     userId: string
-  ): Promise<Partial<ConnectionVectors>> {
+  ): Promise<ConnectionVectorPayload> {
     try {
       // Use environment variable with correct port as fallback
-      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001';
+      const baseUrl = 'http://localhost:3000'; // Force localhost:3000 for embedding generation
+      console.log(`🌐 [generateConnectionEmbeddings] POST ${baseUrl}/api/generate-embeddings for user=${userId} name=${connection.name}`);
       const response = await fetch(`${baseUrl}/api/generate-embeddings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ connectionData: connection, userId })
       });
 
+      console.log(`🛰️ [generateConnectionEmbeddings] Response status=${response.status}`);
       if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        console.error('🛰️ [generateConnectionEmbeddings] Non-OK response body:', text);
         throw new Error(`Embedding generation failed: ${response.status}`);
       }
 
       const result = await response.json();
+      console.log(`📦 [generateConnectionEmbeddings] Result keys:`, Object.keys(result || {}));
+      // If API did not return embeddings, fall back locally
+      if (!result || !result.embeddings) {
+        return this.generateFallbackEmbeddings(connection);
+      }
       return {
         skillsVector: { vector: result.embeddings.skills, dimension: 1536, model: 'text-embedding-3-small', timestamp: new Date() },
         experienceVector: { vector: result.embeddings.experience, dimension: 1536, model: 'text-embedding-3-small', timestamp: new Date() },
@@ -293,7 +456,7 @@ export class DataPopulation {
   }
 
   // Generate fallback embeddings when Azure is not available
-  private static generateFallbackEmbeddings(connection: EnrichedConnection): Partial<ConnectionVectors> {
+  private static generateFallbackEmbeddings(connection: EnrichedConnection): ConnectionVectorPayload {
     const fallbackVector = new Array(1536).fill(0);
     
     // Simple hash-based embedding for fallback
@@ -315,7 +478,7 @@ export class DataPopulation {
   }
 
   // Helper methods for data enrichment
-  private static extractSkills(connection: Connection): string[] {
+  private static extractSkills(connection: Connection | EnrichedConnection): string[] {
     const skills: string[] = [];
     if (connection.position) {
       // Extract common tech skills from position
@@ -354,7 +517,8 @@ export class DataPopulation {
     const industries: string[] = [];
     const experiences: ExperienceRecord[] = (connection as EnrichedConnection).experiences || [];
     experiences.forEach(e => { if (e?.industry) industries.push(String(e.industry)); });
-    if ((connection as any).industry) industries.push(String((connection as any).industry));
+    const industry = (connection as { industry?: string }).industry;
+    if (industry) industries.push(String(industry));
     return industries.filter(Boolean);
   }
 

@@ -43,6 +43,7 @@ export async function POST(req: NextRequest) {
       process.env.AZURE_RESOURCE_NAME &&
       process.env.AZURE_OPENAI_DEPLOYMENT_NAME
     );
+    console.log('[generate-embeddings] isAzureConfigured=', isAzureConfigured, 'userId=', userId, 'name=', connectionData?.name);
 
     if (!isAzureConfigured) {
       return NextResponse.json({
@@ -157,6 +158,7 @@ export async function POST(req: NextRequest) {
       textsToEmbed.push({ text: String(connectionData.summary), type: 'summary' });
     }
 
+    console.log('[generate-embeddings] textsToEmbed count=', textsToEmbed.length, 'types=', textsToEmbed.map(t => t.type));
     // Use batch embedding if we have multiple texts
     if (textsToEmbed.length > 1) {
       try {
@@ -170,8 +172,9 @@ export async function POST(req: NextRequest) {
         textsToEmbed.forEach((item, index) => {
           embeddings[item.type] = batchEmbeddings[index];
         });
+        console.log('[generate-embeddings] batch embeddings ok');
       } catch (error) {
-        console.error('Batch embedding failed, falling back to individual:', error);
+        console.error('[generate-embeddings] Batch embedding failed, falling back to individual:', error);
         // Fallback to individual embeddings
         for (const item of textsToEmbed) {
           embeddings[item.type] = await generateEmbedding(item.text);
@@ -182,6 +185,7 @@ export async function POST(req: NextRequest) {
       embeddings[textsToEmbed[0].type] = await generateEmbedding(textsToEmbed[0].text);
     }
 
+    console.log('[generate-embeddings] returning embeddings for types=', Object.keys(embeddings));
     return NextResponse.json({ 
       success: true, 
       embeddings,

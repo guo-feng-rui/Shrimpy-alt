@@ -33,15 +33,26 @@ export class VectorStorage {
   // Store connection vectors in Firestore
   static async storeConnectionVectors(connectionVectors: ConnectionVectors): Promise<void> {
     try {
+      console.log('[VectorStorage.storeConnectionVectors] begin', {
+        connectionId: connectionVectors.connectionId,
+        userId: connectionVectors.userId,
+        skillsCount: connectionVectors.skills?.length || 0,
+        companiesCount: connectionVectors.companies?.length || 0,
+        locationsCount: connectionVectors.locations?.length || 0,
+        jobTitlesCount: connectionVectors.jobTitles?.length || 0,
+        industriesCount: connectionVectors.industries?.length || 0,
+        educationCount: connectionVectors.education?.length || 0,
+        summariesCount: (connectionVectors as any).summaries?.length || 0
+      });
       const docRef = doc(db, COLLECTIONS.CONNECTION_VECTORS, connectionVectors.connectionId);
       await setDoc(docRef, {
         ...connectionVectors,
         lastUpdated: new Date(),
         isActive: true
       });
-      console.log(`Stored vectors for connection: ${connectionVectors.connectionId}`);
+      console.log(`[VectorStorage.storeConnectionVectors] stored ${connectionVectors.connectionId}`);
     } catch (error) {
-      console.error('Error storing connection vectors:', error);
+      console.error('[VectorStorage.storeConnectionVectors] error:', error);
       throw error;
     }
   }

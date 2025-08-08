@@ -87,7 +87,7 @@ export default function DashboardPage() {
       console.time('🔍 Total search time');
       
       // Perform semantic search
-      const searchResponse = await fetch('/api/search-connections', {
+      const searchResponse = await fetch(`/api/search-connections?userId=${encodeURIComponent(userId)}`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -752,7 +752,7 @@ Ready to unlock the power of your network? Let's start!`}
               )}
               
               {messages.map((message, index) => (
-                  <div key={message.id || index} className={`mb-6 ${message.role === 'user' ? 'text-right' : 'text-left'}`}>
+                  <div key={`${message.id ?? 'msg'}-${index}`} className={`mb-6 ${message.role === 'user' ? 'text-right' : 'text-left'}`}>
                   <div className={`inline-block max-w-3xl rounded-lg px-4 py-3 ${
                     message.role === 'user' 
                       ? 'bg-blue-600 text-white' 
@@ -840,7 +840,7 @@ Ready to unlock the power of your network? Let's start!`}
                              // Use requestAnimationFrame for minimal delay to ensure UI updates
                              requestAnimationFrame(async () => {
                                try {
-                                 await classifyGoalAndSearch(inputText, 'test-user');
+                                 await classifyGoalAndSearch(inputText, 'ygSb7rjydShbQTAGwmQw9I1bGbC2');
                                } catch (searchError) {
                                  console.error('❌ Search failed:', searchError);
                                  addAssistantMessage('Sorry, I encountered an error while searching. Please try again.');
@@ -1095,8 +1095,8 @@ Ready to unlock the power of your network? Let's start!`}
                                  </tr>
                                </thead>
                                <tbody>
-                                 {previewData.map((connection, index) => (
-                                   <tr key={index} className="border-b">
+                                  {previewData.map((connection, index) => (
+                                   <tr key={`${connection.url ?? connection.name ?? 'row'}-${index}`} className="border-b">
                                      <td className="py-2">{connection.name}</td>
                                      <td className="py-2">{connection.company || '-'}</td>
                                      <td className="py-2">{connection.position || '-'}</td>

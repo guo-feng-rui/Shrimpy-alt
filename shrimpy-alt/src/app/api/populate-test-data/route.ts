@@ -6,6 +6,7 @@ import { setupTestData } from '../../../lib/test-data-setup';
 
 export async function POST(req: NextRequest) {
   try {
+    console.log('📥 [/api/populate-test-data] POST hit');
     // Authenticate the request
     const { userId: authUserId } = requireAuth(req);
     
@@ -26,6 +27,7 @@ export async function POST(req: NextRequest) {
 
     if (mode === 'firestore') {
       // First, setup test data if profileCache is empty
+      console.log('📊 [/api/populate-test-data] Mode=firebase/firestore for user', finalUserId);
       console.log('📊 Setting up test data...');
       await setupTestData(finalUserId);
       
@@ -41,7 +43,20 @@ export async function POST(req: NextRequest) {
         mode: 'firestore',
         timestamp: new Date().toISOString()
       });
+    } else if (mode === 'profileCache') {
+      console.log('📊 [/api/populate-test-data] Mode=profileCache for user', finalUserId);
+      // Generate embeddings from profileCache
+      const populationResult = await DataPopulation.generateEmbeddingsFromProfileCache(finalUserId);
+      console.log('📊 profileCache population completed:', populationResult);
+      return NextResponse.json({
+        success: true,
+        message: `Generated embeddings from profileCache: ${populationResult.success} success`,
+        populationResult,
+        mode: 'profileCache',
+        timestamp: new Date().toISOString()
+      });
     } else {
+      console.log('📊 [/api/populate-test-data] Mode=csv for user', finalUserId);
       // CSV upload flow
       if (!csvContent) {
         return NextResponse.json({ 
@@ -95,6 +110,7 @@ export async function POST(req: NextRequest) {
 
 export async function GET(req: NextRequest) {
   try {
+    console.log('📥 [/api/populate-test-data] GET hit');
     // Authenticate the request
     const { userId: authUserId } = requireAuth(req);
     
