@@ -71,13 +71,65 @@ export default function DashboardPage() {
     setMessages(prev => [...prev, assistantMessage as any]);
   };
 
-  // Helper function to format search results
-  const formatSearchResults = (results: Array<{ connection: { name: string; position?: string; company?: string; skills?: string[]; location?: string }; weightedScore: number }>) => {
-    return results.map((result, index) => {
-      const connection = result.connection;
-      const score = (result.weightedScore * 100).toFixed(1);
-      return `${index + 1}. **${connection.name}** (${score}% match)\n   • ${connection.position} at ${connection.company}\n   • Skills: ${connection.skills?.slice(0, 3).join(', ') || 'N/A'}\n   • Location: ${connection.location || 'N/A'}`;
-    }).join('\n\n');
+  // Helper function to generate AI-powered match reasoning
+  const generateMatchReasons = async (searchQuery: string, breakdown: Record<string, number>, connection: Record<string, unknown>, matchedVectors: string[] = [], score: number) => {
+    try {
+      console.log('🤖 Generating AI reasoning for:', connection.name);
+      
+      const response = await fetch('/api/generate-match-reasoning', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          searchQuery,
+          connection,
+          breakdown,
+          matchedVectors,
+          overallScore: score
+        })
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        return data.reasoning;
+      } else {
+        console.error('🤖 Failed to generate AI reasoning:', response.statusText);
+        return `This connection matches your search with a ${Math.round(score)}% score based on profile analysis.`;
+      }
+    } catch (error) {
+      console.error('🤖 Error generating AI reasoning:', error);
+      return `This connection matches your search with a ${Math.round(score)}% score based on profile analysis.`;
+    }
+  };
+
+  // Helper function to format search results with AI-generated reasoning
+  const formatSearchResults = async (results: Array<Record<string, unknown>>, searchQuery: string) => {
+    const formattedResults = await Promise.all(
+      results.map(async (result) => {
+        const connection = result.connection as Record<string, unknown>;
+        const breakdown = result.breakdown as Record<string, number>;
+        const matchedVectors = result.matchedVectors as string[] || [];
+        const score = (((result.weightedScore as number) || (result.score as number)) * 100).toFixed(1);
+        
+        // Extract LinkedIn URL if available
+        const linkedinUrl = connection.url || connection.profileUrl || connection.linkedinUrl;
+        const nameWithLink = linkedinUrl 
+          ? `**[${connection.name}](${linkedinUrl})**` 
+          : `**${connection.name}**`;
+        
+        // Generate AI-powered match reasoning
+        const matchReasons = await generateMatchReasons(
+          searchQuery, 
+          breakdown, 
+          connection, 
+          matchedVectors, 
+          parseFloat(score)
+        );
+        
+        return `${nameWithLink} (${score}% match):\n   ${matchReasons}`;
+      })
+    );
+    
+    return formattedResults.join('\n\n');
   };
 
   // AI-powered intent classification and search
@@ -111,7 +163,7 @@ export default function DashboardPage() {
         console.log('🔍 Search results:', searchData.results.length, 'connections found');
         
         if (searchData.results.length > 0) {
-          const resultsText = formatSearchResults(searchData.results);
+          const resultsText = await formatSearchResults(searchData.results, messageContent);
           console.log('🔍 Sending search results to chat:', resultsText.substring(0, 100) + '...');
           
           // Provide intelligent response based on results

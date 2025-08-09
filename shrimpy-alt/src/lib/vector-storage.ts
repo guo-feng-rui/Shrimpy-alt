@@ -42,7 +42,9 @@ export class VectorStorage {
         jobTitlesCount: connectionVectors.jobTitles?.length || 0,
         industriesCount: connectionVectors.industries?.length || 0,
         educationCount: connectionVectors.education?.length || 0,
-        summariesCount: (connectionVectors as any).summaries?.length || 0
+        summariesCount: (connectionVectors as any).summaries?.length || 0,
+        hasOriginalConnection: !!connectionVectors.originalConnection,
+        originalConnectionKeys: connectionVectors.originalConnection ? Object.keys(connectionVectors.originalConnection) : []
       });
       const docRef = doc(db, COLLECTIONS.CONNECTION_VECTORS, connectionVectors.connectionId);
       await setDoc(docRef, {
@@ -220,6 +222,14 @@ export class VectorStorage {
           const score = similarities.totalScore;
           
           if (score >= threshold) {
+            console.log(`[VectorStorage.searchConnections] Found result:`, {
+              connectionId: connectionVectors.connectionId,
+              score,
+              hasOriginalConnection: !!connectionVectors.originalConnection,
+              originalConnectionKeys: connectionVectors.originalConnection ? Object.keys(connectionVectors.originalConnection).slice(0, 5) : [],
+              fallbackUsed: !connectionVectors.originalConnection
+            });
+            
             results.push({
               connectionId: connectionVectors.connectionId,
               connection: connectionVectors.originalConnection || { name: connectionVectors.connectionId },
