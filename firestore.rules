@@ -1,0 +1,83 @@
+rules_version = "2";
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Allow public read/write for testing
+    match /public-test/{document} {
+      allow read, write: if true;
+    }
+    
+    // Allow authenticated users to read/write their own data
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Allow authenticated users to read/write their own connections
+    match /users/{userId}/connections/{connectionId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Allow authenticated users to read/write their own missions
+    match /users/{userId}/missions/{missionId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Allow authenticated users to read/write their own enriched profiles
+    match /users/{userId}/enrichedProfiles/{profileId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Allow authenticated users to read/write their own profile cache
+    match /profileCache/{cacheId} {
+      allow read: if request.auth != null && request.auth.uid != null && resource.data.userId == request.auth.uid;
+      allow create: if request.auth != null && request.auth.uid != null && request.auth.uid == request.resource.data.userId;
+      allow update: if request.auth != null && request.auth.uid != null && request.auth.uid == request.resource.data.userId && resource.data.userId == request.auth.uid;
+      allow delete: if request.auth != null && request.auth.uid != null && resource.data.userId == request.auth.uid;
+    }
+    
+    // Allow authenticated users to read/write connections directly (for backward compatibility)
+    match /connections/{connectionId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    // Vector storage rules
+    match /connection_vectors/{vectorId} {
+      allow read, write: if request.auth != null && 
+        request.auth.uid == resource.data.userId;
+    }
+    
+    match /user_goals/{userId} {
+      allow read, write: if request.auth != null && 
+        request.auth.uid == userId;
+    }
+    
+    match /search_history/{historyId} {
+      allow read, write: if request.auth != null && 
+        request.auth.uid == resource.data.userId;
+    }
+    
+    // Allow authenticated users to read/write any user data (for development)
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+    
+    // Allow all access for testing (remove in production)
+    match /test-data/{document} {
+      allow read, write: if true;
+    }
+    
+    // Allow all access to profileCache for testing
+    match /profileCache/{document} {
+      allow read, write: if true;
+    }
+    
+    // Allow all access to connection_vectors for testing
+    match /connection_vectors/{document} {
+      allow read, write: if true;
+    }
+    
+    // Allow all access to test-connections for testing
+    match /test-connections/{document} {
+      allow read, write: if true;
+    }
+  }
+} 
